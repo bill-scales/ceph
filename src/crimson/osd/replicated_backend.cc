@@ -117,7 +117,7 @@ ReplicatedBackend::submit_transaction(
 	min_epoch, map_epoch, log_entries, false, tid);
       if (_new_clone && pg.is_missing_on_peer(pg_shard, hoid)) {
 	// The head is in the push queue but hasn't been pushed yet.
-	// We need to ensure that the newly created clone will be 
+	// We need to ensure that the newly created clone will be
 	// pushed as well, otherwise we might skip it.
 	// See: https://tracker.ceph.com/issues/68808
 	to_push_clone.push_back(pg_shard);
