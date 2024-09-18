@@ -25,7 +25,7 @@ namespace ECTransaction {
   struct WritePlan {
     bool invalidates_cache = false; // Yes, both are possible
     std::map<hobject_t,extent_set> to_read;
-    std::map<hobject_t,extent_set> will_write; // superset of to_read
+    std::map<hobject_t,extent_set> will_write;
 
     std::map<hobject_t,ECUtil::HashInfoRef> hash_infos;
   };
@@ -93,13 +93,11 @@ namespace ECTransaction {
 	}
 
 	auto orig_size = projected_size;
-	for (auto extent = raw_write_set.begin();
-	     extent != raw_write_set.end();
-	     ++extent) {
+	for (const auto& [offset, length] : raw_write_set) {
 	  uint64_t head_start =
-	    sinfo.logical_to_prev_stripe_offset(extent.get_start());
+	    sinfo.logical_to_prev_stripe_offset(offset);
 	  uint64_t head_finish =
-	    sinfo.logical_to_next_stripe_offset(extent.get_start());
+	    sinfo.logical_to_next_stripe_offset(offset);
 	  if (head_start > projected_size) {
 	    head_start = projected_size;
 	  }
@@ -115,11 +113,9 @@ namespace ECTransaction {
 	  }
 
 	  uint64_t tail_start =
-	    sinfo.logical_to_prev_stripe_offset(
-	      extent.get_start() + extent.get_len());
+	    sinfo.logical_to_prev_stripe_offset(offset + length);
 	  uint64_t tail_finish =
-	    sinfo.logical_to_next_stripe_offset(
-	      extent.get_start() + extent.get_len());
+	    sinfo.logical_to_next_stripe_offset(offset + length);
 	  if (tail_start != tail_finish &&
 	      (head_start == head_finish || tail_start != head_start) &&
 	      tail_start < orig_size) {
@@ -133,17 +129,46 @@ namespace ECTransaction {
 	  }
 
 	  if (head_start != tail_finish) {
-	    ceph_assert(
-	      sinfo.logical_offset_is_stripe_aligned(
-		tail_finish - head_start)
-	      );
-	    will_write.union_insert(
-	      head_start, tail_finish - head_start);
-	    if (tail_finish > projected_size)
+	    uint64_t write_start = offset;
+	    uint64_t write_end = offset + length;
+	    uint64_t chunksize = sinfo.get_chunk_size();
+	    write_start = write_start - (write_start % chunksize);
+	    write_end = ((write_end + chunksize - 1) / chunksize) * chunksize;
+	    if (tail_finish > projected_size) {
 	      projected_size = tail_finish;
+	      write_end = tail_finish;
+	    }
+	    will_write.union_insert(write_start, write_end - write_start);
 	  } else {
 	    ceph_assert(tail_finish <= projected_size);
 	  }
+	}
+	ldpp_dout(dpp,0) << __func__ << " BILL: will_write: " << will_write << dendl;
+
+        /* Avoid reading unnecessary data that is going to be overwritten */
+	if (plan.to_read.count(obj) != 0) {
+	  ldpp_dout(dpp, 0) << __func__ << " BILL: raw_write_set: " <<
+	    raw_write_set << dendl;
+	  ldpp_dout(dpp, 0) << __func__ << " BILL: before read plan: " <<
+	    plan.to_read[obj] << " " << plan.to_read[obj].empty() << dendl;
+	  for (const auto& [offset, length] : raw_write_set) {
+	    interval_set<uint64_t> overlap;
+	    /* Reduce range of write to chunk boundaries and remove
+             * this from the set of intervals to be read
+             */
+	    uint64_t chunksize = sinfo.get_chunk_size();
+	    uint64_t start = ((offset + chunksize - 1) / chunksize) * chunksize;
+	    uint64_t end = ((offset + length) / chunksize) * chunksize;
+	    if (end > start) {
+	      overlap.insert(start, end - start);
+	      overlap.intersection_of(plan.to_read[obj]);
+	      ldpp_dout(dpp, 0) << __func__ << " BILL: overlap: " <<
+		overlap << " " << offset << " " << length << dendl;
+	      plan.to_read[obj].subtract(overlap);
+	    }
+	  }
+	  ldpp_dout(dpp, 0) << __func__ << " BILL: after read plan: " <<
+	    plan.to_read[obj] << " " << plan.to_read[obj].empty() << dendl;
 	}
 
 	if (op.truncate && op.truncate->second > projected_size) {

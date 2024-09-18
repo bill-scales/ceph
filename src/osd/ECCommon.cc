@@ -753,27 +753,30 @@ bool ECCommon::RMWPipeline::try_state_to_reads()
     cache.open_write_pin(op->pin);
 
     extent_set empty;
-    for (auto &&hpair: op->plan.will_write) {
-      auto to_read_plan_iter = op->plan.to_read.find(hpair.first);
+    for (auto && [oid, to_write_plan] : op->plan.will_write) {
+      auto to_read_plan_iter = op->plan.to_read.find(oid);
       const extent_set &to_read_plan =
 	to_read_plan_iter == op->plan.to_read.end() ?
 	empty :
 	to_read_plan_iter->second;
 
+      extent_set to_rmw_plan;
+      to_rmw_plan.union_of(to_write_plan, to_read_plan);
+      dout(0) << __func__ << " BILL: wp: " << to_write_plan << " rp: "<< to_read_plan << " rmw_plan: " << to_rmw_plan << dendl;
       extent_set remote_read = cache.reserve_extents_for_rmw(
-	hpair.first,
+	oid,
 	op->pin,
-	hpair.second,
+	to_rmw_plan,
 	to_read_plan);
 
       extent_set pending_read = to_read_plan;
       pending_read.subtract(remote_read);
 
       if (!remote_read.empty()) {
-	op->remote_read[hpair.first] = std::move(remote_read);
+	op->remote_read[oid] = std::move(remote_read);
       }
       if (!pending_read.empty()) {
-	op->pending_read[hpair.first] = std::move(pending_read);
+	op->pending_read[oid] = std::move(pending_read);
       }
     }
   } else {
@@ -815,12 +818,12 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
     op->delta_stats);
 
   if (op->using_cache) {
-    for (auto &&hpair: op->pending_read) {
-      op->remote_read_result[hpair.first].insert(
+    for (auto && [oid, to_read] : op->pending_read) {
+      op->remote_read_result[oid].insert(
 	cache.get_remaining_extents_for_rmw(
-	  hpair.first,
+	  oid,
 	  op->pin,
-	  hpair.second));
+	  to_read));
     }
     op->pending_read.clear();
   } else {
@@ -860,18 +863,10 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
       }
     }
   }
-
-  map<hobject_t,extent_set> written_set;
-  for (auto &&i: written) {
-    written_set[i.first] = i.second.get_interval_set();
-  }
-  dout(20) << __func__ << ": written_set: " << written_set << dendl;
-  ceph_assert(written_set == op->plan.will_write);
-
   if (op->using_cache) {
-    for (auto &&hpair: written) {
-      dout(20) << __func__ << ": " << hpair << dendl;
-      cache.present_rmw_update(hpair.first, op->pin, hpair.second);
+    for (auto && [oid, extents] : written) {
+      dout(20) << __func__ << ": " << oid << " " << extents << dendl;
+      cache.present_rmw_update(oid, op->pin, extents);
     }
   }
   op->remote_read.clear();

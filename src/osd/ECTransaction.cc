@@ -34,6 +34,36 @@ using ceph::decode;
 using ceph::encode;
 using ceph::ErasureCodeInterfaceRef;
 
+static void get_min_want_to_write_shards(
+  ErasureCodeInterfaceRef &ecimpl,
+  const ECUtil::stripe_info_t &sinfo,
+  const uint64_t offset,
+  const uint64_t length,
+  set<int> *want_to_write)
+{
+  const long unsigned int k = ecimpl->get_data_chunk_count();
+  const unsigned int m = ecimpl->get_chunk_count() - k;
+  const vector<int> chunk_mapping = ecimpl->get_chunk_mapping();
+  const auto size = chunk_mapping.size();
+  const auto [left_chunk_index, right_chunk_index] =
+    sinfo.offset_length_to_data_chunk_indices(offset, length);
+  const auto distance = std::min(right_chunk_index - left_chunk_index, k);
+  // Add modified data chunks
+  for(uint64_t i = 0; i < distance; i++) {
+    auto raw_chunk = (left_chunk_index + i) % k;
+    auto chunk = size > raw_chunk ? chunk_mapping[raw_chunk] :
+      static_cast<int>(raw_chunk);
+    want_to_write->insert(chunk);
+  }
+  // Add coding parity chunks
+  for(uint64_t i = 0; i < m; i++) {
+    auto raw_chunk = k + i;
+    auto chunk = size > raw_chunk ? chunk_mapping[raw_chunk] :
+      static_cast<int>(raw_chunk);
+    want_to_write->insert(chunk);
+  }
+}
+
 static void encode_and_write(
   pg_t pgid,
   const hobject_t &oid,
@@ -45,6 +75,7 @@ static void encode_and_write(
   uint32_t flags,
   ECUtil::HashInfoRef hinfo,
   extent_map &written,
+  map<hobject_t,extent_set> &write_plan_validation,
   map<shard_id_t, ObjectStore::Transaction> *transactions,
   DoutPrefixProvider *dpp)
 {
@@ -73,24 +104,41 @@ static void encode_and_write(
   }
 
   for (auto &&i : *transactions) {
-    ceph_assert(buffers.count(i.first));
-    bufferlist &enc_bl = buffers[i.first];
-    if (offset >= before_size) {
-      i.second.set_alloc_hint(
+    if (want.contains(i.first)) {
+      ceph_assert(buffers.count(i.first));
+      bufferlist &enc_bl = buffers[i.first];
+      if (offset >= before_size) {
+	i.second.set_alloc_hint(
+	  coll_t(spg_t(pgid, i.first)),
+	  ghobject_t(oid, ghobject_t::NO_GEN, i.first),
+	  0, 0,
+	  CEPH_OSD_ALLOC_HINT_FLAG_SEQUENTIAL_WRITE |
+	  CEPH_OSD_ALLOC_HINT_FLAG_APPEND_ONLY);
+      }
+      i.second.write(
 	coll_t(spg_t(pgid, i.first)),
 	ghobject_t(oid, ghobject_t::NO_GEN, i.first),
-	0, 0,
-	CEPH_OSD_ALLOC_HINT_FLAG_SEQUENTIAL_WRITE |
-	CEPH_OSD_ALLOC_HINT_FLAG_APPEND_ONLY);
+	sinfo.logical_to_prev_chunk_offset(offset),
+	enc_bl.length(),
+	enc_bl,
+	flags);
+      if (want.size() == ecimpl->get_chunk_count()) {
+	// Fullstripe(s) sized write
+	if (i.first == 0) {
+	  write_plan_validation[oid].union_insert(offset, bl.length());
+	}
+      } else {
+	// Partial stripe write
+	if (i.first < static_cast<shard_id_t>(sinfo.get_data_chunk_count())) {
+	  uint64_t write_offset = sinfo.aligned_chunk_offset_to_logical_offset(
+				   sinfo.logical_to_prev_chunk_offset(offset)) +
+	    (i.first * sinfo.get_chunk_size());
+	  write_plan_validation[oid].union_insert(write_offset, enc_bl.length());
+	}
+      }
+    } else {
+      ceph_assert(!buffers.count(i.first));
     }
-    i.second.write(
-      coll_t(spg_t(pgid, i.first)),
-      ghobject_t(oid, ghobject_t::NO_GEN, i.first),
-      sinfo.logical_to_prev_chunk_offset(
-	offset),
-      enc_bl.length(),
-      enc_bl,
-      flags);
   }
 }
 
@@ -123,6 +171,8 @@ void ECTransaction::generate_transactions(
     obj_to_log.insert(make_pair(i.soid, &i));
   }
 
+  map<hobject_t,extent_set> write_plan_validation;
+
   t.safe_create_traverse(
     [&](pair<const hobject_t, PGTransaction::ObjectOperation> &opair) {
       const hobject_t &oid = opair.first;
@@ -143,6 +193,8 @@ void ECTransaction::generate_transactions(
       } else {
 	ceph_assert(oid.is_temp());
       }
+
+      write_plan_validation[oid];
 
       ECUtil::HashInfoRef hinfo;
       {
@@ -546,6 +598,29 @@ void ECTransaction::generate_transactions(
 			 << to_overwrite
 			 << dendl;
       for (auto &&extent: to_overwrite) {
+	ldpp_dout(dpp, 0) << "BILL2: extent: " << extent.get_off() << "~" << extent.get_len() << dendl;
+	const extent_set &to_write_plan = plan.will_write[oid];
+	ldpp_dout(dpp, 0) << "BILL2: twp: " << to_write_plan << dendl;
+	auto &&write_range = to_write_plan.lower_bound(extent.get_off());
+	set<int> want_to_write;
+	while (write_range != to_write_plan.end()) {
+	  auto start = std::max(write_range.get_start(), extent.get_off());
+	  auto end = std::min(write_range.get_end(), extent.get_off() + extent.get_len());
+	  if (start < end) {
+	    auto len = end - start;
+	    ldpp_dout(dpp, 0) << "BILL2: wr: " << start << "~" << len << dendl;
+	    get_min_want_to_write_shards(ecimpl,
+					 sinfo,
+					 start,
+					 len,
+					 &want_to_write);
+	    write_range++;
+	  } else {
+	    break;
+	  }
+	}
+	ldpp_dout(dpp, 0) << "BILL2: w2w: " << want_to_write << dendl;
+
 	ceph_assert(extent.get_off() + extent.get_len() <= append_after);
 	ceph_assert(sinfo.logical_offset_is_stripe_aligned(extent.get_off()));
 	ceph_assert(sinfo.logical_offset_is_stripe_aligned(extent.get_len()));
@@ -559,20 +634,28 @@ void ECTransaction::generate_transactions(
 			     << dendl;
 	  if (rollback_extents.empty()) {
 	    for (auto &&st : *transactions) {
-	      st.second.touch(
-		coll_t(spg_t(pgid, st.first)),
-		ghobject_t(oid, entry->version.version, st.first));
+	      if (want_to_write.contains(st.first)) {
+		st.second.touch(
+		  coll_t(spg_t(pgid, st.first)),
+		  ghobject_t(oid, entry->version.version, st.first));
+	      } else {
+		ldpp_dout(dpp, 0) << "BILL2: rollback touch skipping shard " << st.first << dendl;
+	      }
 	    }
 	  }
 	  rollback_extents.emplace_back(make_pair(restore_from, restore_len));
 	  for (auto &&st : *transactions) {
-	    st.second.clone_range(
-	      coll_t(spg_t(pgid, st.first)),
-	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-	      ghobject_t(oid, entry->version.version, st.first),
-	      restore_from,
-	      restore_len,
-	      restore_from);
+	    if (want_to_write.contains(st.first)) {
+	      st.second.clone_range(
+	        coll_t(spg_t(pgid, st.first)),
+	        ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	        ghobject_t(oid, entry->version.version, st.first),
+	        restore_from,
+	        restore_len,
+	        restore_from);
+	    } else {
+	      ldpp_dout(dpp, 0) << "BILL2: rollback clone skipping shard " << st.first << dendl;
+	    }
 	  }
 	}
 	encode_and_write(
@@ -580,12 +663,13 @@ void ECTransaction::generate_transactions(
 	  oid,
 	  sinfo,
 	  ecimpl,
-	  want,
+	  want_to_write,
 	  extent.get_off(),
 	  extent.get_val(),
 	  fadvise_flags,
 	  hinfo,
 	  written,
+	  write_plan_validation,
 	  transactions,
 	  dpp);
       }
@@ -613,6 +697,7 @@ void ECTransaction::generate_transactions(
 	  fadvise_flags,
 	  hinfo,
 	  written,
+	  write_plan_validation,
 	  transactions,
 	  dpp);
       }
@@ -655,4 +740,15 @@ void ECTransaction::generate_transactions(
 	}
       }
     });
+
+#if 0
+  //FIXME: This doesn't work because write_plan_validation is writing the
+  //same amount to each shard so writes too much for partial stripe writes
+  //that span a stripe boundary.
+
+  // Validate the transactions match the write plan
+  ldpp_dout(dpp, 0) << __func__ << " BILL5 vwp: " << write_plan_validation << dendl;
+  ldpp_dout(dpp, 0) << __func__ << " BILL5 wp: " << plan.will_write << dendl;
+  ceph_assert(write_plan_validation == plan.will_write);
+#endif
 }
