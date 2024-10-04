@@ -572,6 +572,10 @@ void do_interactive( const std::string oid,
       uint64_t length3 = get_num_token();
       ioop = IoOp::generate_write3(offset1, length1, offset2, length2,
 				   offset3, length3);
+    } else if (!op.compare("failwrite")) {
+      uint64_t offset = get_num_token();
+      uint64_t length = get_num_token();
+      ioop = IoOp::generate_fail_write(offset, length);
     } else {
       throw std::runtime_error("Invalid operation "+op);
     }

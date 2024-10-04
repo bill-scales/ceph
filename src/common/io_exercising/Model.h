@@ -194,6 +194,15 @@ public:
       }
       num_io++;
       break;
+    case IO_OP_FAILWRITE:
+      ceph_assert(created);
+      // Not allowed: write overlapping with parallel read or write
+      ceph_assert(!reads.intersects(op.offset1, op.length1));
+      ceph_assert(!writes.intersects(op.offset1, op.length1));
+      writes.union_insert(op.offset1, op.length1);
+      // No model update as the write fails
+      num_io++;
+      break;
     default:
       break;
     }

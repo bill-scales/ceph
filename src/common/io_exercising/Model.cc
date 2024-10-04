@@ -262,6 +262,21 @@ void RadosIo::applyIoOp(IoOp &op)
     }
     break;
 
+  case IO_OP_FAILWRITE:
+    {
+      aop = new AsyncOp(this, op.offset1, op.length1);
+      db->generate_data(op.offset1, op.length1, aop->bl1);
+      aop->wop.write(op.offset1 * block_size, aop->bl1);
+      auto write_cb = [aop] (boost::system::error_code ec) {
+        ceph_assert(ec != boost::system::errc::success);
+        delete aop;
+      };
+      librados::async_operate(asio, io, oid,
+                              &aop->wop, 0, nullptr, write_cb);
+      num_io++;
+    }
+    break;
+
   default:
     break;
   }
