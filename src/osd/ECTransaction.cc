@@ -632,20 +632,16 @@ void ECTransaction::generate_transactions(
 	  ldpp_dout(dpp, 20) << "generate_transactions: overwriting "
 			     << restore_from << "~" << restore_len
 			     << dendl;
-	  if (rollback_extents.empty()) {
-	    for (auto &&st : *transactions) {
-	      if (want_to_write.contains(st.first)) {
-		st.second.touch(
-		  coll_t(spg_t(pgid, st.first)),
-		  ghobject_t(oid, entry->version.version, st.first));
-	      } else {
-		ldpp_dout(dpp, 0) << "BILL2: rollback touch skipping shard " << st.first << dendl;
-	      }
-	    }
-	  }
 	  rollback_extents.emplace_back(make_pair(restore_from, restore_len));
 	  for (auto &&st : *transactions) {
 	    if (want_to_write.contains(st.first)) {
+	      if (!entry->written_shards.contains(st.first)) {
+		// First write to this shard
+		entry->written_shards.insert(st.first);
+		st.second.touch(
+		  coll_t(spg_t(pgid, st.first)),
+		  ghobject_t(oid, entry->version.version, st.first));
+	      }
 	      st.second.clone_range(
 	        coll_t(spg_t(pgid, st.first)),
 	        ghobject_t(oid, ghobject_t::NO_GEN, st.first),

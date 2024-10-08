@@ -202,10 +202,12 @@ void PGBackend::rollback(
   struct RollbackVisitor : public ObjectModDesc::Visitor {
     const hobject_t &hoid;
     PGBackend *pg;
+    const pg_log_entry_t &entry;
     ObjectStore::Transaction t;
     RollbackVisitor(
       const hobject_t &hoid,
-      PGBackend *pg) : hoid(hoid), pg(pg) {}
+      PGBackend *pg,
+      const pg_log_entry_t &entry) : hoid(hoid), pg(pg),entry(entry) {}
     void append(uint64_t old_size) override {
       ObjectStore::Transaction temp;
       pg->rollback_append(hoid, old_size, &temp);
@@ -246,14 +248,21 @@ void PGBackend::rollback(
       version_t gen,
       const vector<pair<uint64_t, uint64_t> > &extents) override {
       ObjectStore::Transaction temp;
-      pg->rollback_extents(gen, extents, hoid, &temp);
-      temp.append(t);
-      temp.swap(t);
+      if (entry.written_shards.empty() || entry.written_shards.contains(pg->get_parent()->whoami_shard().shard)) {
+	auto dpp = pg->get_parent()->get_dpp();
+	ldpp_dout(dpp, 0) << "BILLR: not skipping rollback " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+	pg->rollback_extents(gen, extents, hoid, &temp);
+	temp.append(t);
+	temp.swap(t);
+      } else {
+        auto dpp = pg->get_parent()->get_dpp();
+	ldpp_dout(dpp, 0) << "BILLR: skipping rollback " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+      }
     }
   };
 
   ceph_assert(entry.mod_desc.can_rollback());
-  RollbackVisitor vis(entry.soid, this);
+  RollbackVisitor vis(entry.soid, this, entry);
   entry.mod_desc.visit(&vis);
   t->append(vis.t);
 }
@@ -262,11 +271,13 @@ struct Trimmer : public ObjectModDesc::Visitor {
   const hobject_t &soid;
   PGBackend *pg;
   ObjectStore::Transaction *t;
+  const pg_log_entry_t &entry;
   Trimmer(
     const hobject_t &soid,
     PGBackend *pg,
-    ObjectStore::Transaction *t)
-    : soid(soid), pg(pg), t(t) {}
+    ObjectStore::Transaction *t,
+    const pg_log_entry_t &entry)
+    : soid(soid), pg(pg), t(t), entry(entry) {}
   void rmobject(version_t old_version) override {
     pg->trim_rollback_object(
       soid,
@@ -277,10 +288,17 @@ struct Trimmer : public ObjectModDesc::Visitor {
   void rollback_extents(
     version_t gen,
     const vector<pair<uint64_t, uint64_t> > &extents) override {
-    pg->trim_rollback_object(
-      soid,
-      gen,
-      t);
+    if (entry.written_shards.empty() || entry.written_shards.contains(pg->get_parent()->whoami_shard().shard)) {
+      auto dpp = pg->get_parent()->get_dpp();
+      ldpp_dout(dpp, 0) << "BILLR: not skipping trim " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+      pg->trim_rollback_object(
+        soid,
+        gen,
+        t);
+    } else {
+      auto dpp = pg->get_parent()->get_dpp();
+      ldpp_dout(dpp, 0) << "BILLR: skipping trim " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+    }
   }
 };
 
@@ -292,7 +310,7 @@ void PGBackend::rollforward(
   ldpp_dout(dpp, 20) << __func__ << ": entry=" << entry << dendl;
   if (!entry.can_rollback())
     return;
-  Trimmer trimmer(entry.soid, this, t);
+  Trimmer trimmer(entry.soid, this, t, entry);
   entry.mod_desc.visit(&trimmer);
 }
 
@@ -302,7 +320,7 @@ void PGBackend::trim(
 {
   if (!entry.can_rollback())
     return;
-  Trimmer trimmer(entry.soid, this, t);
+  Trimmer trimmer(entry.soid, this, t, entry);
   entry.mod_desc.visit(&trimmer);
 }
 
@@ -529,6 +547,7 @@ void PGBackend::rollback_try_stash(
   version_t old_version,
   ObjectStore::Transaction *t) {
   ceph_assert(!hoid.is_temp());
+  dout(0) << "BILL ROLLBACK_TRYSTASH " << hoid << " " << old_version << dendl;
   t->remove(
     coll,
     ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard));
@@ -545,6 +564,7 @@ void PGBackend::rollback_extents(
   ObjectStore::Transaction *t) {
   auto shard = get_parent()->whoami_shard().shard;
   for (auto &&extent: extents) {
+    dout(0) << "BILL ROLLBACK_WITH CLONE " << hoid << " " << extent.first << "~" << extent.second << dendl;
     t->clone_range(
       coll,
       ghobject_t(hoid, gen, shard),
@@ -563,6 +583,7 @@ void PGBackend::trim_rollback_object(
   version_t old_version,
   ObjectStore::Transaction *t) {
   ceph_assert(!hoid.is_temp());
+  dout(0) << "BILL TRIM CLONE " << hoid << " " << old_version << dendl;
   t->remove(
     coll, ghobject_t(hoid, old_version, get_parent()->whoami_shard().shard));
 }
