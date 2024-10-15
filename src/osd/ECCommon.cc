@@ -736,7 +736,7 @@ bool ECCommon::RMWPipeline::try_state_to_reads()
 
   Op *op = &(waiting_state.front());
   if (op->requires_rmw() && pipeline_state.cache_invalid()) {
-    ceph_assert(get_parent()->get_pool().allows_ecoverwrites());
+    ceph_assert(sinfo.supports_ec_overwrites());
     dout(20) << __func__ << ": blocking " << *op
 	     << " because it requires an rmw and the cache is invalid "
 	     << pipeline_state
@@ -792,7 +792,7 @@ bool ECCommon::RMWPipeline::try_state_to_reads()
   dout(10) << __func__ << ": " << *op << dendl;
 
   if (!op->remote_read.empty()) {
-    ceph_assert(get_parent()->get_pool().allows_ecoverwrites());
+    ceph_assert(sinfo.supports_ec_overwrites());
     objects_read_async_no_cache(
       op->remote_read,
       [op, this](ec_extents_t &&results) {
@@ -860,7 +860,7 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
   dout(20) << __func__ << ": written: " << written << dendl;
   dout(20) << __func__ << ": op: " << *op << dendl;
 
-  if (!get_parent()->get_pool().allows_ecoverwrites()) {
+  if (!sinfo.supports_ec_overwrites()) {
     for (auto &&i: op->log_entries) {
       if (i.requires_kraken()) {
 	derr << __func__ << ": log entry " << i << " requires kraken"

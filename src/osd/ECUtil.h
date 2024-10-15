@@ -21,17 +21,41 @@
 #include "include/ceph_assert.h"
 #include "include/encoding.h"
 #include "common/Formatter.h"
+#include "osd_types.h"
 
 namespace ECUtil {
 
 class stripe_info_t {
   const uint64_t stripe_width;
+  const uint64_t plugin_flags;
   const uint64_t chunk_size;
+  const pg_pool_t *pool;
 public:
-  stripe_info_t(uint64_t stripe_size, uint64_t stripe_width)
+  stripe_info_t( ErasureCodeInterfaceRef ec_impl, const pg_pool_t *pool, uint64_t stripe_width)
     : stripe_width(stripe_width),
-      chunk_size(stripe_width / stripe_size) {
+      plugin_flags(ec_impl->get_supported_optimizations()),
+      chunk_size(stripe_width / ec_impl->get_data_chunk_count()),
+      pool(pool) {
+    ceph_assert(stripe_width % ec_impl->get_data_chunk_count() == 0);
+  }
+  stripe_info_t( uint64_t stripe_size, uint64_t stripe_width)
+    : stripe_width(stripe_width),
+      plugin_flags(0),
+      chunk_size(stripe_width / stripe_size),
+      pool(nullptr) {
     ceph_assert(stripe_width % stripe_size == 0);
+  }
+  bool supports_ec_optimizations() const {
+    return pool->allows_ecoptimizations();
+  }
+  bool supports_ec_overwrites() const {
+    return pool->allows_ecoverwrites();
+  }
+  bool supports_partial_reads() const {
+    return (plugin_flags & ErasureCodeInterface::FLAG_EC_PLUGIN_PARTIAL_READ_OPTIMIZATION) != 0;
+  }
+  bool supports_partial_writes() const {
+    return (plugin_flags & ErasureCodeInterface::FLAG_EC_PLUGIN_PARTIAL_WRITE_OPTIMIZATION) != 0;
   }
   bool logical_offset_is_stripe_aligned(uint64_t logical) const {
     return (logical % stripe_width) == 0;

@@ -599,24 +599,32 @@ void ECTransaction::generate_transactions(
 			 << dendl;
       for (auto &&extent: to_overwrite) {
 	ldpp_dout(dpp, 0) << "BILL2: extent: " << extent.get_off() << "~" << extent.get_len() << dendl;
-	const extent_set &to_write_plan = plan.will_write[oid];
-	ldpp_dout(dpp, 0) << "BILL2: twp: " << to_write_plan << dendl;
-	auto &&write_range = to_write_plan.lower_bound(extent.get_off());
 	set<int> want_to_write;
-	while (write_range != to_write_plan.end()) {
-	  auto start = std::max(write_range.get_start(), extent.get_off());
-	  auto end = std::min(write_range.get_end(), extent.get_off() + extent.get_len());
-	  if (start < end) {
-	    auto len = end - start;
-	    ldpp_dout(dpp, 0) << "BILL2: wr: " << start << "~" << len << dendl;
-	    get_min_want_to_write_shards(ecimpl,
-					 sinfo,
-					 start,
-					 len,
-					 &want_to_write);
-	    write_range++;
-	  } else {
-	    break;
+	if (sinfo.supports_ec_optimizations()) {
+	  // Only write shards that are modified
+	  const extent_set &to_write_plan = plan.will_write[oid];
+	  ldpp_dout(dpp, 0) << "BILL2: twp: " << to_write_plan << dendl;
+	  auto &&write_range = to_write_plan.lower_bound(extent.get_off());
+	  while (write_range != to_write_plan.end()) {
+	    auto start = std::max(write_range.get_start(), extent.get_off());
+	    auto end = std::min(write_range.get_end(), extent.get_off() + extent.get_len());
+	    if (start < end) {
+	      auto len = end - start;
+	      ldpp_dout(dpp, 0) << "BILL2: wr: " << start << "~" << len << dendl;
+	      get_min_want_to_write_shards(ecimpl,
+					   sinfo,
+					   start,
+					   len,
+					   &want_to_write);
+	      write_range++;
+	    } else {
+	      break;
+	    }
+	  }
+	} else {
+	  // Old code always writes all shards even if there are no changes
+	  for (unsigned i = 0;i < ecimpl->get_chunk_count(); ++i) {
+	    want_to_write.insert(i);
 	  }
 	}
 	ldpp_dout(dpp, 0) << "BILL2: w2w: " << want_to_write << dendl;
@@ -710,6 +718,10 @@ void ECTransaction::generate_transactions(
 			     << dendl;
 	  entry->mod_desc.rollback_extents(
 	    entry->version.version, rollback_extents);
+	}
+	if (entry->written_shards.size() == ecimpl->get_chunk_count()) {
+	  // More efficient to encode an empty set to mean all shards
+	  entry->written_shards.clear();
 	}
 	hinfo->set_total_chunk_size_clear_hash(
 	  sinfo.aligned_logical_offset_to_chunk_offset(new_size));

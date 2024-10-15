@@ -132,7 +132,7 @@ ECBackend::ECBackend(
     rmw_pipeline(cct, ec_impl, this->sinfo, get_parent()->get_eclistener(), *this),
     recovery_backend(cct, this->coll, ec_impl, this->sinfo, read_pipeline, unstable_hashinfo_registry, get_parent(), this),
     ec_impl(ec_impl),
-    sinfo(ec_impl->get_data_chunk_count(), stripe_width),
+    sinfo(ec_impl, &(get_parent()->get_pool()), stripe_width),
     unstable_hashinfo_registry(cct, ec_impl) {
   ceph_assert((ec_impl->get_data_chunk_count() *
 	  ec_impl->get_chunk_size(stripe_width)) == stripe_width);
@@ -1091,7 +1091,7 @@ void ECBackend::handle_sub_read(
 	  );
       }
 
-      if (!get_parent()->get_pool().allows_ecoverwrites()) {
+      if (!sinfo.supports_ec_overwrites()) {
 	// This shows that we still need deep scrub because large enough files
 	// are read in sections, so the digest check here won't be done here.
 	// Do NOT check osd_read_eio_on_bad_digest here.  We need to report
@@ -1794,7 +1794,7 @@ int ECBackend::be_deep_scrub(
     o.digest_present = false;
     return 0;
   } else {
-    if (!get_parent()->get_pool().allows_ecoverwrites()) {
+    if (!sinfo.supports_ec_overwrites()) {
       if (!hinfo->has_chunk_hash()) {
         dout(0) << "_scan_list  " << poid << " got invalid hash info" << dendl;
         o.ec_size_mismatch = true;
