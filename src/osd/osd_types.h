@@ -208,6 +208,12 @@ std::ostream& operator<<(std::ostream &lhs, const pg_shard_t &rhs);
 
 using HobjToShardSetMapping = std::map<hobject_t, std::set<pg_shard_t>>;
 
+class MayActAsPrimaryPredicate {
+public:
+  virtual bool operator()(const pg_shard_t shard) const = 0;
+  virtual ~MayActAsPrimaryPredicate() {}
+};
+
 class IsPGRecoverablePredicate {
 public:
   /**

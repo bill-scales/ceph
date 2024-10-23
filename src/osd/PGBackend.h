@@ -402,6 +402,7 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
    virtual void on_change() = 0;
    virtual void clear_recovery_state() = 0;
 
+   virtual MayActAsPrimaryPredicate *get_act_as_primary_predicate() const = 0;
    virtual IsPGRecoverablePredicate *get_is_recoverable_predicate() const = 0;
    virtual IsPGReadablePredicate *get_is_readable_predicate() const = 0;
    virtual int get_ec_data_chunk_count() const { return 0; };

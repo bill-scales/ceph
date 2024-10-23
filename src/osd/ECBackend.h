@@ -340,6 +340,31 @@ public:
 
   ceph::ErasureCodeInterfaceRef ec_impl;
 
+  /**
+   * ECActAsPrimaryPred
+   *
+   * Restrict which shards can be the acting primary
+   */
+  class ECActAsPrimaryPred : public MayActAsPrimaryPredicate {
+    ceph::ErasureCodeInterfaceRef ec_impl;
+    const ECUtil::stripe_info_t& sinfo;
+  public:
+    explicit ECActAsPrimaryPred(ceph::ErasureCodeInterfaceRef ec_impl,const ECUtil::stripe_info_t& sinfo) : ec_impl(ec_impl), sinfo(sinfo) {}
+    bool operator()(const pg_shard_t shard) const override {
+      if (sinfo.supports_ec_optimizations()&&sinfo.supports_partial_writes()) {
+	//FIXME: NEED TO CONSIDER CHUNK MAPPING?!
+	// Acting primary is restricted to shard 0 or one of
+	// coding parity shards
+	return (shard.shard == 0) ||
+	  (shard.shard >= (int)ec_impl->get_data_chunk_count());
+      }
+      // Otherwise no constraint on the acting primary
+      return true;
+    }
+  };
+  MayActAsPrimaryPredicate *get_act_as_primary_predicate() const override {
+    return new ECActAsPrimaryPred(ec_impl,sinfo);
+  }
 
   /**
    * ECRecPred

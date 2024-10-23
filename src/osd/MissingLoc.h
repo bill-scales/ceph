@@ -109,6 +109,7 @@ class MissingLoc {
  public:
   boost::scoped_ptr<IsPGReadablePredicate> is_readable;
   boost::scoped_ptr<IsPGRecoverablePredicate> is_recoverable;
+  boost::scoped_ptr<MayActAsPrimaryPredicate> act_as_primary;
   explicit MissingLoc(
     spg_t pgid,
     MappingInfo *mapping_info,
@@ -117,9 +118,14 @@ class MissingLoc {
     : pgid(pgid), mapping_info(mapping_info), dpp(dpp), cct(cct) { }
   void set_backend_predicates(
     IsPGReadablePredicate *_is_readable,
-    IsPGRecoverablePredicate *_is_recoverable) {
+    IsPGRecoverablePredicate *_is_recoverable,
+    MayActAsPrimaryPredicate *_act_as_primary) {
     is_readable.reset(_is_readable);
     is_recoverable.reset(_is_recoverable);
+    act_as_primary.reset(_act_as_primary);
+  }
+  const MayActAsPrimaryPredicate &get_act_as_primary_predicate() const {
+    return *act_as_primary;
   }
   const IsPGRecoverablePredicate &get_recoverable_predicate() const {
     return *is_recoverable;

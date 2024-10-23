@@ -2692,11 +2692,34 @@ void OSDMap::_pg_to_raw_osds(
     *ppps = pps;
 }
 
-int OSDMap::_pick_primary(const vector<int>& osds) const
+int OSDMap::_pick_primary(const pg_pool_t& pool, const vector<int>& osds) const
 {
-  for (auto osd : osds) {
-    if (osd != CRUSH_ITEM_NONE) {
-      return osd;
+  if (pool.has_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS)) {
+    // Restrict choice of primary to data shard 0 or one of the coding parities
+    // FIXME: Bug - Needs to consider EC mapping
+    // FIXME: Concern - Observed that turning on the pool flag does cause an epoch and will move primaries, need to understand how this is working
+    // FIXME: Concern - is there a split brain issue here? Do all OSDs have the same pool info for an epoch?
+    // FIXME: Concern - does EC profile have to specify k? Do we need to police this when setting flag/changing profile?
+    // FIXME: Messy - Has PG been created by the time this is called? If yes we can find PG and call ECBackend to do some of ths work, if not it will be messy
+    auto& ecp = get_erasure_code_profile(pool.erasure_code_profile);
+    auto pk = ecp.find("k");
+    ceph_assert(pk != ecp.end());
+    int k = atoi(pk->second.c_str());
+    int count = 0;
+    for (auto osd : osds) {
+      count++;
+      if (count != 1 && count <= k) {
+	continue; // BILL: Hack - cannot be primary
+      }
+      if (osd != CRUSH_ITEM_NONE) {
+	return osd;
+      }
+    }
+  } else {
+    for (auto osd : osds) {
+      if (osd != CRUSH_ITEM_NONE) {
+	return osd;
+      }
     }
   }
   return -1;
@@ -2875,6 +2898,8 @@ void OSDMap::_get_temp_osds(const pg_pool_t& pool, pg_t pg,
     *temp_primary = pp->second;
   } else if (!temp_pg->empty()) { // apply pg_temp's primary
     for (unsigned i = 0; i < temp_pg->size(); ++i) {
+      //FIXME: BILL HACK - STOP shard 1 being acting shard
+      if (i==1) continue;
       if ((*temp_pg)[i] != CRUSH_ITEM_NONE) {
 	*temp_primary = (*temp_pg)[i];
 	break;
@@ -2892,7 +2917,7 @@ void OSDMap::pg_to_raw_osds(pg_t pg, vector<int> *raw, int *primary) const
     return;
   }
   _pg_to_raw_osds(*pool, pg, raw, NULL);
-  *primary = _pick_primary(*raw);
+  *primary = _pick_primary(*pool, *raw);
 }
 
 void OSDMap::pg_to_raw_upmap(pg_t pg, vector<int>*raw,
@@ -2921,7 +2946,7 @@ void OSDMap::pg_to_raw_up(pg_t pg, vector<int> *up, int *primary) const
   _pg_to_raw_osds(*pool, pg, &raw, &pps);
   _apply_upmap(*pool, pg, &raw);
   _raw_to_up_osds(*pool, raw, up);
-  *primary = _pick_primary(raw);
+  *primary = _pick_primary(*pool, raw);
   _apply_primary_affinity(pps, *pool, up, primary);
 }
 
@@ -2954,7 +2979,7 @@ void OSDMap::_pg_to_up_acting_osds(
     _pg_to_raw_osds(*pool, pg, &raw, &pps);
     _apply_upmap(*pool, pg, &raw);
     _raw_to_up_osds(*pool, raw, &_up);
-    _up_primary = _pick_primary(_up);
+    _up_primary = _pick_primary(*pool, _up);
     _apply_primary_affinity(pps, *pool, &_up, &_up_primary);
     if (_acting.empty()) {
       _acting = _up;

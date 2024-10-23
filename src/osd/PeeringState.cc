@@ -1518,6 +1518,11 @@ map<pg_shard_t, pg_info_t>::const_iterator PeeringState::find_best_info(
     // Disqualify anyone who is incomplete (not fully backfilled)
     if (p->second.is_incomplete())
       continue;
+    // Erasure code may restrict the choice of acting primary
+    if (!missing_loc.get_act_as_primary_predicate()(p->first)) {
+      psdout(0) << "BILLG: ignoring " << p->first << dendl;
+      continue;
+    }
     if (best == infos.end()) {
       best = p;
       continue;
