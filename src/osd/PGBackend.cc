@@ -207,7 +207,7 @@ void PGBackend::rollback(
     RollbackVisitor(
       const hobject_t &hoid,
       PGBackend *pg,
-      const pg_log_entry_t &entry) : hoid(hoid), pg(pg),entry(entry) {}
+      const pg_log_entry_t &entry) : hoid(hoid), pg(pg), entry(entry) {}
     void append(uint64_t old_size) override {
       ObjectStore::Transaction temp;
       pg->rollback_append(hoid, old_size, &temp);
@@ -246,12 +246,19 @@ void PGBackend::rollback(
     }
     void rollback_extents(
       version_t gen,
-      const vector<pair<uint64_t, uint64_t> > &extents) override {
+      const vector<pair<uint64_t, uint64_t> > &extents,
+      uint64_t object_size) override {
       ObjectStore::Transaction temp;
+      const pg_pool_t& pool = pg->get_parent()->get_pool();
+      if (!entry.written_shards.empty()) {
+	ceph_assert(pool.allows_ecoptimizations());
+      }
       if (entry.written_shards.empty() || entry.written_shards.contains(pg->get_parent()->whoami_shard().shard)) {
 	auto dpp = pg->get_parent()->get_dpp();
 	ldpp_dout(dpp, 0) << "BILLR: not skipping rollback " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
-	pg->rollback_extents(gen, extents, hoid, &temp);
+	const uint64_t shard_size = pg->object_size_to_shard_size(object_size, pg->get_parent()->whoami_shard().shard);
+	ldpp_dout(dpp, 0) << "BILLR: object_size " << object_size << " shard_size " << shard_size << dendl;
+	pg->rollback_extents(gen, extents, hoid, shard_size, &temp);
 	temp.append(t);
 	temp.swap(t);
       } else {
@@ -287,7 +294,8 @@ struct Trimmer : public ObjectModDesc::Visitor {
   // try_rmobject defaults to rmobject
   void rollback_extents(
     version_t gen,
-    const vector<pair<uint64_t, uint64_t> > &extents) override {
+    const vector<pair<uint64_t, uint64_t> > &extents,
+    uint64_t object_size) override {
     if (entry.written_shards.empty() || entry.written_shards.contains(pg->get_parent()->whoami_shard().shard)) {
       auto dpp = pg->get_parent()->get_dpp();
       ldpp_dout(dpp, 0) << "BILLR: not skipping trim " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
@@ -561,17 +569,28 @@ void PGBackend::rollback_extents(
   version_t gen,
   const vector<pair<uint64_t, uint64_t> > &extents,
   const hobject_t &hoid,
+  const uint64_t shard_size,
   ObjectStore::Transaction *t) {
   auto shard = get_parent()->whoami_shard().shard;
-  for (auto &&extent: extents) {
-    dout(0) << "BILL ROLLBACK_WITH CLONE " << hoid << " " << extent.first << "~" << extent.second << dendl;
-    t->clone_range(
-      coll,
-      ghobject_t(hoid, gen, shard),
-      ghobject_t(hoid, ghobject_t::NO_GEN, shard),
-      extent.first,
-      extent.second,
-      extent.first);
+  for (auto [offset, length]: extents) {
+    if (offset >= shard_size) {
+      // extent on this shard is beyond the end of the object - nothing to do
+      dout(0) << "BILL ROLLBACK_WITH CLONE " << hoid << " " << offset << "~" << length << " is out of range " << shard_size << dendl;
+    } else {
+      if (offset + length >= shard_size) {
+	dout(0) << "BILL ROLLBACK_WITH CLONE " << length << " is being truncated" << dendl;
+	// extent on this shard goes beyond end of the object - truncate length
+	length = shard_size - offset;
+      }
+      dout(0) << "BILL ROLLBACK_WITH CLONE " << hoid << " " << offset << "~" << length << dendl;
+      t->clone_range(
+	coll,
+	ghobject_t(hoid, gen, shard),
+	ghobject_t(hoid, ghobject_t::NO_GEN, shard),
+	offset,
+	length,
+	offset);
+    }
   }
   t->remove(
     coll,

@@ -4577,9 +4577,19 @@ void ObjectModDesc::visit(Visitor *visitor) const
       case ROLLBACK_EXTENTS: {
 	vector<pair<uint64_t, uint64_t> > extents;
 	version_t gen;
+	uint64_t object_size;
 	decode(gen, bp);
 	decode(extents, bp);
-	visitor->rollback_extents(gen,extents);
+	if (struct_v < 3) {
+	  // Object size is used by newer code which does not pad objects to a
+	  // multiple of the strip size to truncate the rollback clone
+	  // operations. Older code pads the object so use a large object size
+	  // to avoid doing any truncation.
+	  object_size = 0xffffffffffffffffUL;
+	} else {
+	  decode(object_size, bp);
+	}
+	visitor->rollback_extents(gen, extents, object_size);
 	break;
       }
       default:
@@ -4636,10 +4646,12 @@ struct DumpVisitor : public ObjectModDesc::Visitor {
   }
   void rollback_extents(
     version_t gen,
-    const vector<pair<uint64_t, uint64_t> > &extents) override {
+    const vector<pair<uint64_t, uint64_t> > &extents,
+    uint64_t object_size) override {
     f->open_object_section("op");
     f->dump_string("code", "ROLLBACK_EXTENTS");
     f->dump_unsigned("gen", gen);
+    f->dump_unsigned("object_size", object_size);
     f->dump_stream("snaps") << extents;
     f->close_section();
   }

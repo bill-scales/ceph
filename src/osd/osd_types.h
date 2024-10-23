@@ -3984,7 +3984,8 @@ public:
     virtual void update_snaps(const std::set<snapid_t> &old_snaps) {}
     virtual void rollback_extents(
       version_t gen,
-      const std::vector<std::pair<uint64_t, uint64_t> > &extents) {}
+      const std::vector<std::pair<uint64_t, uint64_t> > &extents,
+      uint64_t object_size) {}
     virtual ~Visitor() {}
   };
   void visit(Visitor *visitor) const;
@@ -4082,15 +4083,18 @@ public:
     ENCODE_FINISH(bl);
   }
   void rollback_extents(
-    version_t gen, const std::vector<std::pair<uint64_t, uint64_t> > &extents) {
+   version_t gen,
+   const std::vector<std::pair<uint64_t, uint64_t> > &extents,
+   uint64_t object_size) {
     ceph_assert(can_local_rollback);
     ceph_assert(!rollback_info_completed);
     if (max_required_version < 2)
       max_required_version = 2;
-    ENCODE_START(2, 2, bl);
+    ENCODE_START(3, 2, bl);
     append_id(ROLLBACK_EXTENTS);
     encode(gen, bl);
     encode(extents, bl);
+    encode(object_size, bl);
     ENCODE_FINISH(bl);
   }
 

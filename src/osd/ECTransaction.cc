@@ -717,7 +717,9 @@ void ECTransaction::generate_transactions(
 			     << rollback_extents
 			     << dendl;
 	  entry->mod_desc.rollback_extents(
-	    entry->version.version, rollback_extents);
+            entry->version.version,
+            rollback_extents,
+            hinfo->get_total_logical_size(sinfo));
 	}
 	if (entry->written_shards.size() == ecimpl->get_chunk_count()) {
 	  // More efficient to encode an empty set to mean all shards

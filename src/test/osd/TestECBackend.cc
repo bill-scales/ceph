@@ -27,7 +27,7 @@ TEST(ECUtil, stripe_info_t)
   const uint64_t swidth = 4096;
   const uint64_t ssize = 4;
 
-  ECUtil::stripe_info_t s(ssize, swidth);
+  ECUtil::stripe_info_t s(ssize, swidth, 1);
   ASSERT_EQ(s.get_stripe_width(), swidth);
 
   ASSERT_EQ(s.logical_to_next_chunk_offset(0), 0u);
@@ -92,7 +92,7 @@ TEST(ECUtil, offset_length_is_same_stripe)
   const uint64_t schunk = 1024;
   const uint64_t ssize = 4;
 
-  ECUtil::stripe_info_t s(ssize, swidth);
+  ECUtil::stripe_info_t s(ssize, swidth, 1);
   ASSERT_EQ(s.get_stripe_width(), swidth);
   ASSERT_EQ(s.get_chunk_size(), schunk);
 
@@ -167,7 +167,7 @@ TEST(ECCommon, get_min_want_to_read_shards)
   const uint64_t swidth = 4096;
   const uint64_t ssize = 4;
 
-  ECUtil::stripe_info_t s(ssize, swidth);
+  ECUtil::stripe_info_t s(ssize, swidth, 1);
   ASSERT_EQ(s.get_stripe_width(), swidth);
   ASSERT_EQ(s.get_chunk_size(), 1024);
 
@@ -248,7 +248,7 @@ TEST(ECCommon, get_min_want_to_read_shards_bug67087)
   const uint64_t swidth = 4096;
   const uint64_t ssize = 4;
 
-  ECUtil::stripe_info_t s(ssize, swidth);
+  ECUtil::stripe_info_t s(ssize, swidth, 1);
   ASSERT_EQ(s.get_stripe_width(), swidth);
   ASSERT_EQ(s.get_chunk_size(), 1024);
 

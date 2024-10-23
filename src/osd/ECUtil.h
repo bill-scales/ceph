@@ -30,20 +30,74 @@ class stripe_info_t {
   const uint64_t plugin_flags;
   const uint64_t chunk_size;
   const pg_pool_t *pool;
+  const int k; // Can be calculated with a division from above. Better to cache.
+  const int m;
+  const std::vector<int> chunk_mapping;
+  const std::vector<int> chunk_mapping_reverse;
+private:
+  static std::vector<int> complete_chunk_mapping(std::vector<int> _chunk_mapping, int n)
+  {
+    int size = (int)_chunk_mapping.size();
+    std::vector<int> chunk_mapping(n);
+    for (int i = 0; i < n; i++) {
+      if (size > i) {
+        chunk_mapping.at(i) = _chunk_mapping.at(i);
+      } else {
+        chunk_mapping.at(i) = i;
+      }
+    }
+    return chunk_mapping;
+  }
+  static std::vector<int> reverse_chunk_mapping(std::vector<int> chunk_mapping)
+  {
+    int size = (int)chunk_mapping.size();
+    std::vector<int> reverse(size, -1);
+    for (int i = 0; i < size; i++) {
+      // Mapping must be a bijection and a permutation
+      ceph_assert(reverse.at(chunk_mapping.at(i)) == -1);
+      reverse.at(chunk_mapping.at(i)) = i;
+    }
+    return reverse;
+  }
 public:
-  stripe_info_t( ErasureCodeInterfaceRef ec_impl, const pg_pool_t *pool, uint64_t stripe_width)
+  stripe_info_t(ErasureCodeInterfaceRef ec_impl, const pg_pool_t *pool, uint64_t stripe_width)
     : stripe_width(stripe_width),
       plugin_flags(ec_impl->get_supported_optimizations()),
       chunk_size(stripe_width / ec_impl->get_data_chunk_count()),
-      pool(pool) {
-    ceph_assert(stripe_width % ec_impl->get_data_chunk_count() == 0);
+      pool(pool),
+      k(ec_impl->get_data_chunk_count()),
+      m(ec_impl->get_coding_chunk_count()),
+      chunk_mapping(complete_chunk_mapping(ec_impl->get_chunk_mapping(), k + m)),
+      chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
+    ceph_assert(stripe_width % k == 0);
   }
-  stripe_info_t( uint64_t stripe_size, uint64_t stripe_width)
+  stripe_info_t(int k, uint64_t stripe_width, int m)
     : stripe_width(stripe_width),
       plugin_flags(0),
-      chunk_size(stripe_width / stripe_size),
-      pool(nullptr) {
-    ceph_assert(stripe_width % stripe_size == 0);
+      chunk_size(stripe_width / k),
+      pool(nullptr),
+      k(k),
+      m(m),
+      chunk_mapping(complete_chunk_mapping(std::vector<int>(), k + m)),
+      chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
+    ceph_assert(stripe_width % k == 0);
+  }
+  uint64_t object_size_to_shard_size(const uint64_t size, int shard) const {
+    uint64_t remainder = size % get_stripe_width();
+    uint64_t shard_size = (size - remainder) / k;
+    shard = chunk_mapping_reverse[shard];
+    if (shard > (int)get_data_chunk_count()) {
+      // coding parity shards have same size as data shard 0
+      shard = 0;
+    }
+    if (remainder > shard * get_chunk_size()) {
+      remainder -= shard * get_chunk_size();
+      if (remainder > get_chunk_size()) {
+	remainder = get_chunk_size();
+      }
+      shard_size += remainder;
+    }
+    return shard_size;
   }
   bool supports_ec_optimizations() const {
     return pool->allows_ecoptimizations();
