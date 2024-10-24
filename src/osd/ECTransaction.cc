@@ -155,7 +155,7 @@ void ECTransaction::generate_transactions(
   set<hobject_t> *temp_added,
   set<hobject_t> *temp_removed,
   DoutPrefixProvider *dpp,
-  const ceph_release_t require_osd_release)
+  const OSDMapRef& osdmap)
 {
   ceph_assert(written_map);
   ceph_assert(transactions);
@@ -315,7 +315,7 @@ void ECTransaction::generate_transactions(
 	[&](const PGTransaction::ObjectOperation::Init::None &) {},
 	[&](const PGTransaction::ObjectOperation::Init::Create &op) {
 	  for (auto &&st: *transactions) {
-	    if (require_osd_release >= ceph_release_t::octopus) {
+	    if (osdmap->require_osd_release >= ceph_release_t::octopus) {
 	      st.second.create(
 		coll_t(spg_t(pgid, st.first)),
 		ghobject_t(oid, ghobject_t::NO_GEN, st.first));
@@ -367,57 +367,6 @@ void ECTransaction::generate_transactions(
       ceph_assert(!(op.clear_omap));
       ceph_assert(!(op.omap_header));
       ceph_assert(op.omap_updates.empty());
-
-      if (!op.attr_updates.empty()) {
-	map<string, bufferlist, less<>> to_set;
-	for (auto &&j: op.attr_updates) {
-	  if (j.second) {
-	    to_set[j.first] = *(j.second);
-	  } else {
-	    for (auto &&st : *transactions) {
-	      st.second.rmattr(
-		coll_t(spg_t(pgid, st.first)),
-		ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-		j.first);
-	    }
-	  }
-	  if (obc) {
-	    auto citer = obc->attr_cache.find(j.first);
-	    if (entry) {
-	      if (citer != obc->attr_cache.end()) {
-		// won't overwrite anything we put in earlier
-		xattr_rollback.insert(
-		  make_pair(
-		    j.first,
-		    std::optional<bufferlist>(citer->second)));
-	      } else {
-		// won't overwrite anything we put in earlier
-		xattr_rollback.insert(
-		  make_pair(
-		    j.first,
-		    std::nullopt));
-	      }
-	    }
-	    if (j.second) {
-	      obc->attr_cache[j.first] = *(j.second);
-	    } else if (citer != obc->attr_cache.end()) {
-	      obc->attr_cache.erase(citer);
-	    }
-	  } else {
-	    ceph_assert(!entry);
-	  }
-	}
-	for (auto &&st : *transactions) {
-	  st.second.setattrs(
-	    coll_t(spg_t(pgid, st.first)),
-	    ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-	    to_set);
-	}
-	ceph_assert(!xattr_rollback.empty());
-      }
-      if (entry && !xattr_rollback.empty()) {
-	entry->mod_desc.setattrs(xattr_rollback);
-      }
 
       if (op.alloc_hint) {
 	/* logical_to_next_chunk_offset() scales down both aligned and
@@ -704,6 +653,10 @@ void ECTransaction::generate_transactions(
 	  write_plan_validation,
 	  transactions,
 	  dpp);
+	if (entry) {
+	  // All shards are being written
+	  entry->written_shards.clear();
+	}
       }
 
       ldpp_dout(dpp, 20) << "generate_transactions: " << oid
@@ -736,6 +689,105 @@ void ECTransaction::generate_transactions(
 			   << append_after
 			   << dendl;
 	entry->mod_desc.append(append_after);
+      }
+
+      // Update shard_versions in object_info to record which shards are being
+      // written
+      if (entry) {
+	object_info_t& oi = obc->obs.oi;
+	bool update = false;
+	if (entry->written_shards.empty()) {
+	  if (!oi.shard_versions.empty()) {
+	    oi.shard_versions.clear();
+	    ldpp_dout(dpp, 0) << "BILLOI: Full shard write, clearing shard versions -  version " << oi.version << dendl;
+	    update = true;
+	  } else {
+	    ldpp_dout(dpp, 0) << "BILLOI: Full shard write, no prev shard versions -  version " << oi.version << dendl;
+	  }
+	} else {
+	  int unwritten_shard = 1;
+	  for (auto written_shard : entry->written_shards) {
+	    while (unwritten_shard < written_shard) {
+	      if (!oi.shard_versions.count(shard_id_t(unwritten_shard))) {
+		oi.shard_versions[shard_id_t(unwritten_shard)] =
+		  oi.prior_version;
+		ldpp_dout(dpp, 0) << "BILLOI: Shard " << unwritten_shard << " set to " << oi.prior_version << dendl;
+		update = true;
+	      } else {
+		ldpp_dout(dpp, 0) << "BILLOI: Shard " << unwritten_shard << " left at " << oi.shard_versions[shard_id_t(unwritten_shard)] << dendl;
+	      }
+	      unwritten_shard++;
+	    }
+	    if (written_shard > 0 &&
+		written_shard < (int)sinfo.get_data_chunk_count()) {
+	      if (oi.shard_versions.erase(shard_id_t(written_shard))) {
+		update = true;
+	      }
+	      ldpp_dout(dpp, 0) << "BILLOI: Shard " << written_shard << " cleared at " << oi.version << dendl;
+	    } else {
+	      ldpp_dout(dpp, 0) << "BILLOI: Shard " << written_shard << " blank at " << oi.version << dendl;
+	    }
+	    if (written_shard == unwritten_shard) {
+	      unwritten_shard++;
+	    }
+	  }
+	}
+	if (update) {
+	  bufferlist bl;
+	  oi.encode(bl,osdmap->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+	  op.attr_updates[OI_ATTR] = bl;
+	}
+      }
+
+      if (!op.attr_updates.empty()) {
+	map<string, bufferlist, less<>> to_set;
+	for (auto &&j: op.attr_updates) {
+	  if (j.second) {
+	    to_set[j.first] = *(j.second);
+	  } else {
+	    for (auto &&st : *transactions) {
+	      st.second.rmattr(
+		coll_t(spg_t(pgid, st.first)),
+		ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+		j.first);
+	    }
+	  }
+	  if (obc) {
+	    auto citer = obc->attr_cache.find(j.first);
+	    if (entry) {
+	      if (citer != obc->attr_cache.end()) {
+		// won't overwrite anything we put in earlier
+		xattr_rollback.insert(
+		  make_pair(
+		    j.first,
+		    std::optional<bufferlist>(citer->second)));
+	      } else {
+		// won't overwrite anything we put in earlier
+		xattr_rollback.insert(
+		  make_pair(
+		    j.first,
+		    std::nullopt));
+	      }
+	    }
+	    if (j.second) {
+	      obc->attr_cache[j.first] = *(j.second);
+	    } else if (citer != obc->attr_cache.end()) {
+	      obc->attr_cache.erase(citer);
+	    }
+	  } else {
+	    ceph_assert(!entry);
+	  }
+	}
+	for (auto &&st : *transactions) {
+	  st.second.setattrs(
+	    coll_t(spg_t(pgid, st.first)),
+	    ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	    to_set);
+	}
+	ceph_assert(!xattr_rollback.empty());
+      }
+      if (entry && !xattr_rollback.empty()) {
+	entry->mod_desc.setattrs(xattr_rollback);
       }
 
       if (!op.is_delete()) {

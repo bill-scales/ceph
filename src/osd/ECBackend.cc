@@ -1437,7 +1437,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       std::map<hobject_t,extent_map> *written,
       std::map<shard_id_t, ObjectStore::Transaction> *transactions,
       DoutPrefixProvider *dpp,
-      const ceph_release_t require_osd_release) final
+      const OSDMapRef& osdmap) final
   {
     assert(t);
     ECTransaction::generate_transactions(
@@ -1453,7 +1453,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       &temp_added,
       &temp_cleared,
       dpp,
-      require_osd_release);
+      osdmap);
   }
 
   template <typename F>

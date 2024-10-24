@@ -854,7 +854,7 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
     &written,
     &trans,
     get_parent()->get_dpp(),
-    get_osdmap()->require_osd_release);
+    get_osdmap());
 
   dout(20) << __func__ << ": " << cache << dendl;
   dout(20) << __func__ << ": written: " << written << dendl;
@@ -969,7 +969,7 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
       std::map<hobject_t,extent_map> *written,
       std::map<shard_id_t, ObjectStore::Transaction> *transactions,
       DoutPrefixProvider *dpp,
-      const ceph_release_t require_osd_release) final
+      const OSDMapRef& osdmap) final
   {
     // NOP, as -- in constrast to ECClassicalOp -- there is no
     // transaction involved
