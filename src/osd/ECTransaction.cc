@@ -718,8 +718,7 @@ void ECTransaction::generate_transactions(
 	      }
 	      unwritten_shard++;
 	    }
-	    if (written_shard > 0 &&
-		written_shard < (int)sinfo.get_data_chunk_count()) {
+	    if (!sinfo.is_metadata_shard(written_shard)) {
 	      if (oi.shard_versions.erase(shard_id_t(written_shard))) {
 		update = true;
 	      }
@@ -779,10 +778,21 @@ void ECTransaction::generate_transactions(
 	  }
 	}
 	for (auto &&st : *transactions) {
-	  st.second.setattrs(
-	    coll_t(spg_t(pgid, st.first)),
-	    ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-	    to_set);
+	  if (sinfo.is_metadata_shard(st.first)) {
+	    // Update all attributes
+	    st.second.setattrs(
+	      coll_t(spg_t(pgid, st.first)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	      to_set);
+	  } else if (entry->written_shards.contains(st.first)||
+		     entry->written_shards.empty()) {
+	    // Only update object_info attribute
+	    st.second.setattr(
+	      coll_t(spg_t(pgid, st.first)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	      OI_ATTR,
+	      to_set[OI_ATTR]);
+          }
 	}
 	ceph_assert(!xattr_rollback.empty());
       }
@@ -794,15 +804,16 @@ void ECTransaction::generate_transactions(
 	bufferlist hbuf;
 	encode(*hinfo, hbuf);
 	for (auto &&i : *transactions) {
-	  i.second.setattr(
-	    coll_t(spg_t(pgid, i.first)),
-	    ghobject_t(oid, ghobject_t::NO_GEN, i.first),
-	    ECUtil::get_hinfo_key(),
-	    hbuf);
+	  if (sinfo.is_metadata_shard(i.first)) {
+	    i.second.setattr(
+	      coll_t(spg_t(pgid, i.first)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, i.first),
+	      ECUtil::get_hinfo_key(),
+	      hbuf);
+	  }
 	}
       }
     });
-
 #if 0
   //FIXME: This doesn't work because write_plan_validation is writing the
   //same amount to each shard so writes too much for partial stripe writes

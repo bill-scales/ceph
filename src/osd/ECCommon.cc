@@ -884,15 +884,34 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
   std::vector<std::pair<int, Message*>> messages;
   messages.reserve(get_parent()->get_acting_recovery_backfill_shards().size());
   set<pg_shard_t> backfill_shards = get_parent()->get_backfill_shards();
+
   for (set<pg_shard_t>::const_iterator i =
 	 get_parent()->get_acting_recovery_backfill_shards().begin();
        i != get_parent()->get_acting_recovery_backfill_shards().end();
        ++i) {
-    op->pending_apply.insert(*i);
-    op->pending_commit.insert(*i);
     map<shard_id_t, ObjectStore::Transaction>::iterator iter =
       trans.find(i->shard);
     ceph_assert(iter != trans.end());
+    if (iter->second.empty()) {
+      dout(0) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " is empty!" << dendl;
+    } else {
+      dout(0) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " contents ";
+      Formatter *f = Formatter::create("json");
+      f->open_object_section("t");
+      iter->second.dump(f);
+      f->close_section();
+      f->flush(*_dout);
+      delete f;
+      *_dout << dendl;
+    }
+    if (op->skip_transaction(pending_roll_forward, iter->first, iter->second)) {
+      // Must be an empty transaction
+      ceph_assert(iter->second.empty());
+      dout(0) << " BILL: Skipping transaction for osd." << iter->first << dendl;
+      continue;
+    }
+    op->pending_apply.insert(*i);
+    op->pending_commit.insert(*i);
     bool should_send = get_parent()->should_send_op(*i, op->hoid);
     const pg_stat_t &stats =
       (should_send || !backfill_shards.count(*i)) ?
@@ -973,6 +992,13 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
   {
     // NOP, as -- in constrast to ECClassicalOp -- there is no
     // transaction involved
+  }
+  bool skip_transaction(
+      std::set<shard_id_t>& pending_roll_forward,
+      shard_id_t shard,
+      ceph::os::Transaction& transaction) final
+  {
+    return !pending_roll_forward.erase(shard);
   }
 };
 

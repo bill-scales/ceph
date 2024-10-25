@@ -215,10 +215,16 @@ void PGBackend::rollback(
       temp.swap(t);
     }
     void setattrs(map<string, std::optional<bufferlist> > &attrs) override {
-      ObjectStore::Transaction temp;
-      pg->rollback_setattrs(hoid, attrs, &temp);
-      temp.append(t);
-      temp.swap(t);
+      auto dpp = pg->get_parent()->get_dpp();
+      if (pg->is_metadata_shard(pg->get_parent()->whoami_shard().shard)) {
+	ldpp_dout(dpp, 0) << "BILLR: not skipping attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+	ObjectStore::Transaction temp;
+	pg->rollback_setattrs(hoid, attrs, &temp);
+	temp.append(t);
+	temp.swap(t);
+      } else {
+	ldpp_dout(dpp, 0) << "BILLR: skipping attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+      }
     }
     void rmobject(version_t old_version) override {
       ObjectStore::Transaction temp;

@@ -580,6 +580,11 @@ struct ECCommon {
         std::map<shard_id_t, ceph::os::Transaction> *transactions,
         DoutPrefixProvider *dpp,
 	const OSDMapRef& osdmap) = 0;
+
+      virtual bool skip_transaction(
+        std::set<shard_id_t>& pending_roll_forward,
+	shard_id_t shard,
+	ceph::os::Transaction& transaction) = 0;
     };
     using OpRef = std::unique_ptr<Op>;
     using op_list = boost::intrusive::list<Op>;
@@ -676,6 +681,10 @@ struct ECCommon {
       ec_backend.handle_sub_write(from, std::move(msg), op, trace, *get_parent());
     }
     // end of iface
+
+    // Set of shards that will need a dummy transaction for the final
+    // roll forward
+    std::set<shard_id_t> pending_roll_forward;
 
     ceph::ErasureCodeInterfaceRef ec_impl;
     const ECUtil::stripe_info_t& sinfo;

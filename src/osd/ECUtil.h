@@ -99,6 +99,12 @@ public:
     }
     return shard_size;
   }
+  /**
+   * Return true if shard should always get metadata updates. See also MayActAsPrimary predicate.
+   */
+  bool is_metadata_shard(int shard) const {
+    return !supports_ec_optimizations() || (shard==0) || (shard>=(int)get_data_chunk_count());
+  }
   bool supports_ec_optimizations() const {
     return pool->allows_ecoptimizations();
   }

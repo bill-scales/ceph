@@ -404,7 +404,10 @@ public:
   uint64_t object_size_to_shard_size(const uint64_t size, int shard) const override {
     return sinfo.object_size_to_shard_size(size, shard);
   }
-
+  bool is_metadata_shard(int shard) const override {
+    // FIXME: Need to do reverse mapping of shard here
+    return sinfo.is_metadata_shard(shard);
+  }
   /**
    * ECReadPred
    *

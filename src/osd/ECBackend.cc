@@ -1456,6 +1456,18 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       osdmap);
   }
 
+  bool skip_transaction(
+      std::set<shard_id_t>& pending_roll_forward,
+      shard_id_t shard,
+      ceph::os::Transaction& transaction) final
+  {
+    if (transaction.empty()) {
+      return true;
+    }
+    pending_roll_forward.insert(shard);
+    return false;
+  }
+
   template <typename F>
   static ECTransaction::WritePlan get_write_plan(
     const ECUtil::stripe_info_t &sinfo,
