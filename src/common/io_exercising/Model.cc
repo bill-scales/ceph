@@ -154,7 +154,7 @@ void RadosIo::applyIoOp(IoOp &op)
                     &aop->bl1, nullptr);
       auto read_cb = [aop] (boost::system::error_code ec, bufferlist bl) {
         ceph_assert(ec == boost::system::errc::success);
-        aop->r->db->validate(aop->bl1, aop->offset1, aop->length1);
+        ceph_assert(aop->r->db->validate(aop->bl1, aop->offset1, aop->length1));
         delete aop;
       };
       librados::async_operate(asio, io, oid,
@@ -174,8 +174,8 @@ void RadosIo::applyIoOp(IoOp &op)
                     &aop->bl2, nullptr);
       auto read2_cb = [aop] (boost::system::error_code ec, bufferlist bl) {
         ceph_assert(ec == boost::system::errc::success);
-        aop->r->db->validate(aop->bl1, aop->offset1, aop->length1);
-        aop->r->db->validate(aop->bl2, aop->offset2, aop->length2);
+        ceph_assert(aop->r->db->validate(aop->bl1, aop->offset1, aop->length1));
+	ceph_assert(aop->r->db->validate(aop->bl2, aop->offset2, aop->length2));
         delete aop;
       };
       librados::async_operate(asio, io, oid,
@@ -199,9 +199,9 @@ void RadosIo::applyIoOp(IoOp &op)
                     &aop->bl3, nullptr);
       auto read3_cb = [aop] (boost::system::error_code ec, bufferlist bl) {
         ceph_assert(ec == boost::system::errc::success);
-        aop->r->db->validate(aop->bl1, aop->offset1, aop->length1);
-        aop->r->db->validate(aop->bl2, aop->offset2, aop->length2);
-        aop->r->db->validate(aop->bl3, aop->offset3, aop->length3);
+        ceph_assert(aop->r->db->validate(aop->bl1, aop->offset1, aop->length1));
+        ceph_assert(aop->r->db->validate(aop->bl2, aop->offset2, aop->length2));
+        ceph_assert(aop->r->db->validate(aop->bl3, aop->offset3, aop->length3));
         delete aop;
       };
       librados::async_operate(asio, io, oid,

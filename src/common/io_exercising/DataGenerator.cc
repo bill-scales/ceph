@@ -131,7 +131,7 @@ bool Ceph::DataGenerator::HeaderedSeededRandomGenerator::validate(const ceph::bu
         found_seed |= (uint8_t)bufferlist[(i * m_model.get_block_size()) + j];
       }
 
-      // std::cout << "Expected seed " << m_model.get_seed(i) << " at offset " << (i * m_model.get_block_size()) << " and found " << found_seed << std::endl;
+      std::cout << "Expected seed " << m_model.get_seed(i) << " at offset " << (i * m_model.get_block_size()) << " and found " << found_seed << std::endl;
     }
   }
 
