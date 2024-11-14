@@ -738,6 +738,7 @@ void ECBackend::RecoveryBackend::run_recovery_op(
   for (list<RecoveryOp>::iterator i = h.ops.begin();
        i != h.ops.end();
        ++i) {
+    dout(0) << "BILLBACKFILL: run_recovery_op for " << i->hoid << dendl;
     dout(10) << __func__ << ": starting " << *i << dendl;
     ceph_assert(!recovery_ops.count(i->hoid));
     RecoveryOp &op = recovery_ops.insert(make_pair(i->hoid, *i)).first->second;

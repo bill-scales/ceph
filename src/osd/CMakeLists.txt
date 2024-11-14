@@ -43,7 +43,6 @@ set(osd_srcs
   scheduler/mClockScheduler.cc
   PeeringState.cc
   PGStateUtils.cc
-  recovery_types.cc
   MissingLoc.cc
   osd_perf_counters.cc
   ${CMAKE_SOURCE_DIR}/src/common/TrackedOp.cc
