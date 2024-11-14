@@ -610,6 +610,10 @@ void ECTransaction::generate_transactions(
 	      ldpp_dout(dpp, 0) << "BILL2: rollback clone skipping shard " << st.first << dendl;
 	    }
 	  }
+	  // Written shards needs to include shards that should have been modified but are not in the current online set of OSDs
+	  for (auto shard : want_to_write) {
+	    entry->written_shards.insert(shard);
+	  }
 	}
 	encode_and_write(
 	  pgid,
