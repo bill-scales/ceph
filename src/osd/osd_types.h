@@ -4735,16 +4735,18 @@ public:
    *
    * @param other pg_log_t to copy from
    * @param from copy entries after this version
+   * @param shard shard that is receiving the entries
    */
-  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from);
+  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from, shard_id_t shard);
 
   /**
    * copy up to N entries
    *
    * @param other source log
    * @param max max number of entries to copy
+   * @param shard shard that is receiving the entries
    */
-  void copy_up_to(CephContext* cct, const pg_log_t &other, int max);
+  void copy_up_to(CephContext* cct, const pg_log_t &other, int max, shard_id_t shard);
 
   std::ostream& print(std::ostream& out) const;
 

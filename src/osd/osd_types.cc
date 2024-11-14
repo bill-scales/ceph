@@ -5319,7 +5319,7 @@ static void _handle_dups(CephContext* cct, pg_log_t &target, const pg_log_t &oth
 }
 
 
-void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v)
+void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v, shard_id_t shard)
 {
   can_rollback_to = other.can_rollback_to;
   head = other.head;
@@ -5329,13 +5329,18 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v)
 				 << " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (i->version <= v) {
-      // make tail accurate.
-      tail = i->version;
-      break;
+    if (!i->written_shards.empty()&&
+	!i->written_shards.contains(shard)) {
+      lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYAFTER: skipping partial write log version " << i->version << " " << i->written_shards << dendl;
+    } else {
+      if (i->version <= v) {
+	// make tail accurate.
+	tail = i->version;
+	break;
+      }
+      lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
+      log.push_front(*i);
     }
-    lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
-    log.push_front(*i);
   }
   _handle_dups(cct, *this, other, cct->_conf->osd_pg_log_dups_tracked);
   lgeneric_subdout(cct, osd, 20) << __func__ << " END v " << v
@@ -5343,7 +5348,7 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v)
 				 << " other.dups.size()=" << other.dups.size() << dendl;
 }
 
-void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max)
+void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, shard_id_t shard)
 {
   can_rollback_to = other.can_rollback_to;
   int n = 0;
@@ -5354,12 +5359,17 @@ void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max)
 				<< " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (n++ >= max) {
-      tail = i->version;
-      break;
+    if (!i->written_shards.empty()&&
+	!i->written_shards.contains(shard)) {
+      lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYUPTO: skipping partial write log version " << i->version << dendl;
+    } else {
+      if (n++ >= max) {
+	tail = i->version;
+	break;
+      }
+      lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
+      log.push_front(*i);
     }
-    lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
-    log.push_front(*i);
   }
   _handle_dups(cct, *this, other, cct->_conf->osd_pg_log_dups_tracked);
   lgeneric_subdout(cct, osd, 20) << __func__ << " END max " << max
