@@ -1520,7 +1520,7 @@ map<pg_shard_t, pg_info_t>::const_iterator PeeringState::find_best_info(
       continue;
     // Erasure code may restrict the choice of acting primary
     if (!missing_loc.get_act_as_primary_predicate()(p->first)) {
-      psdout(0) << "BILLG: ignoring " << p->first << dendl;
+      psdout(0) << "BILLFINDBESTINFO: Skipping non-metadata shard " << p->first << dendl;
       continue;
     }
     if (best == infos.end()) {
