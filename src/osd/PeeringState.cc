@@ -333,6 +333,33 @@ bool PeeringState::proc_replica_info(
   psdout(10) << " got osd." << from << " " << oinfo << dendl;
   ceph_assert(is_primary());
   peer_info[from] = oinfo;
+  if (!oinfo.partial_writes_last_complete.empty()) {
+    // OSD has provided info which includes partial_writes_last_complete data.
+    // Merge this with our copy keeping the most up to date versions
+    psdout(0) << "BILLPROCREPINFO osd." << from << " has partial_write_last_complete info" << dendl;
+    for (const auto & [shard, version] : oinfo.partial_writes_last_complete) {
+      if (info.partial_writes_last_complete.contains(shard)) {
+	if (info.partial_writes_last_complete[shard] < version) {
+          psdout(0) << "BILLPROCREPINFO osd." << from << " updating shard " << shard << " to " << version << dendl;
+	  info.partial_writes_last_complete[shard] = version;
+	}
+      } else {
+        psdout(0) << "BILLPROCREPINFO osd." << from << " setting shard " << shard << " to " << version << dendl;
+	info.partial_writes_last_complete[shard] = version;
+      }
+    }
+  }
+  if (info.partial_writes_last_complete.contains(from.shard)) {
+    // Check if last_complete and last_update can be advanced based on knowledge of partial_writes
+    const auto version = info.partial_writes_last_complete[from.shard];
+    if (version > peer_info[from].last_complete) {
+      psdout(0) << "BILLPROCREPINFO osd." << from << " has last_complete " << peer_info[from].last_complete << " but partial_write_last_complete says its at " << version << dendl;
+      peer_info[from].last_complete = version;
+    }
+    if (version > peer_info[from].last_update) {
+      peer_info[from].last_update = version;
+    }
+  }
   might_have_unfound.insert(from);
 
   update_history(oinfo.history);
@@ -2983,7 +3010,7 @@ void PeeringState::activate(
   }
   if (acting_set_writeable()) {
     PGLog::LogEntryHandlerRef rollbacker{pl->get_log_handler(t)};
-    pg_log.roll_forward(rollbacker.get());
+    pg_log.roll_forward(&info, rollbacker.get());
   }
 }
 
@@ -3368,7 +3395,7 @@ void PeeringState::merge_from(
   }
 
   PGLog::LogEntryHandlerRef handler{pl->get_log_handler(rctx.transaction)};
-  pg_log.roll_forward(handler.get());
+  pg_log.roll_forward(&info, handler.get());
 
   info.last_complete = info.last_update;  // to fake out trim()
   pg_log.reset_recovery_pointers();
@@ -3407,7 +3434,7 @@ void PeeringState::merge_from(
     // prepare log
     PGLog::LogEntryHandlerRef handler{
       source->pl->get_log_handler(rctx.transaction)};
-    source->pg_log.roll_forward(handler.get());
+    source->pg_log.roll_forward(&info, handler.get());
     source->info.last_complete = source->info.last_update;  // to fake out trim()
     source->pg_log.reset_recovery_pointers();
     source->pg_log.trim(source->info.last_update, source->info);
@@ -4085,13 +4112,14 @@ bool PeeringState::append_log_entries_update_missing(
     pg_log.append_new_log_entries(
       info.last_backfill,
       entries,
+      &info,
       rollbacker.get());
 
   if (roll_forward_to && entries.rbegin()->soid > info.last_backfill) {
-    pg_log.roll_forward(rollbacker.get());
+    pg_log.roll_forward(&info, rollbacker.get());
   }
   if (roll_forward_to && *roll_forward_to > pg_log.get_can_rollback_to()) {
-    pg_log.roll_forward_to(*roll_forward_to, rollbacker.get());
+    pg_log.roll_forward_to(*roll_forward_to, &info, rollbacker.get());
     last_rollback_info_trimmed_to_applied = *roll_forward_to;
   }
 
@@ -4140,6 +4168,7 @@ void PeeringState::merge_new_log_entries(
       entries,
       true,
       NULL,
+      &pinfo,
       pmissing,
       NULL,
       dpp);
@@ -4229,12 +4258,13 @@ void PeeringState::append_log(
      * above */
     if (transaction_applied &&
 	p->soid > info.last_backfill) {
-      pg_log.roll_forward(handler.get());
+      pg_log.roll_forward(&info, handler.get());
     }
   }
   if (transaction_applied && roll_forward_to > pg_log.get_can_rollback_to()) {
     pg_log.roll_forward_to(
       roll_forward_to,
+      &info,
       handler.get());
     last_rollback_info_trimmed_to_applied = roll_forward_to;
   }
@@ -4270,7 +4300,7 @@ void PeeringState::recover_got(
      * to roll it back anyway (and we'll be rolled forward shortly
      * anyway) */
     PGLog::LogEntryHandlerRef handler{pl->get_log_handler(t)};
-    pg_log.roll_forward_to(v, handler.get());
+    pg_log.roll_forward_to(v, &info, handler.get());
   }
 
   psdout(10) << "got missing " << oid << " v " << v << dendl;
@@ -6612,7 +6642,7 @@ boost::statechart::result PeeringState::Stray::react(const MLogRec& logevt)
     ps->dirty_big_info = true;  // maybe.
 
     PGLog::LogEntryHandlerRef rollbacker{pl->get_log_handler(t)};
-    ps->pg_log.reset_backfill_claim_log(msg->log, rollbacker.get());
+    ps->pg_log.reset_backfill_claim_log(msg->log, &ps->info, rollbacker.get());
 
     ps->pg_log.reset_backfill();
   } else {
@@ -6645,9 +6675,23 @@ boost::statechart::result PeeringState::Stray::react(const MInfoRec& infoevt)
     ps->proc_lease(*infoevt.lease);
   }
 
-  ceph_assert(infoevt.info.last_update == ps->info.last_update);
+  if (infoevt.info.last_update > ps->info.last_update) {
+    // Log is missing entries, this is only allowed if the missing entries are all partial writes that did not update this shard
+    psdout(0) << "BILLSTRAYREACT osd." << infoevt.from << " has last_update " << infoevt.info.last_update << " but we are behind at " << ps->info.last_update << " hopefully partial_write_last_complete says that is expected" << dendl;
+    // Must be a non-metadata shard
+    ceph_assert(!ps->missing_loc.get_act_as_primary_predicate()(ps->pg_whoami));
+    // There must be a partial write last_complete entry for this shard
+    ceph_assert(infoevt.info.partial_writes_last_complete.contains(ps->pg_whoami.shard));
+    // Last complete must match the partial write last_complete
+    ceph_assert(infoevt.info.partial_writes_last_complete.at(ps->pg_whoami.shard) == infoevt.info.last_complete);
+    // Last update must be tracking last complete
+    ceph_assert(infoevt.info.last_update == infoevt.info.last_complete);
+  } else {
+    // Log must match after any divergent entries were rewound
+    ceph_assert(infoevt.info.last_update == ps->info.last_update);
+  }
+  // Log must be consistent with info
   ceph_assert(ps->pg_log.get_head() == ps->info.last_update);
-
   post_event(Activate(infoevt.info.last_epoch_started));
   return transit<ReplicaActive>();
 }
@@ -6760,7 +6804,7 @@ PeeringState::Deleting::Deleting(my_context ctx)
 
   // clear log
   PGLog::LogEntryHandlerRef rollbacker{pl->get_log_handler(t)};
-  ps->pg_log.roll_forward(rollbacker.get());
+  ps->pg_log.roll_forward(&ps->info, rollbacker.get());
 
   // adjust info to backfill
   ps->info.set_last_backfill(hobject_t());
@@ -7339,6 +7383,40 @@ PeeringState::GetMissing::GetMissing(my_context ctx)
       psdout(10) << " osd." << *i << " will fully backfill; can infer empty missing set" << dendl;
       ps->peer_missing[*i].clear();
       continue;
+    }
+
+    // Partial writes - if the peer log is only divergent because of partial writes then
+    // roll forward the peer to cover writes it was not involved in.
+    if (pi.last_update < ps->info.last_update) {
+      psdout(0) << "BILL_GET_MISSING: osd." << *i << " has version " << pi.last_update << " which is behind authorative log " << ps->info.last_update << dendl;
+      // Search backwards through log looking for a match with peer's head entry
+      mempool::osd_pglog::list<pg_log_entry_t>::const_iterator p = ps->pg_log.get_log().log.end();
+      while (p != ps->pg_log.get_log().log.begin()) {
+	--p;
+	if (p->version.version <= pi.last_update.version) {
+	  break;
+	}
+      }
+      if (pi.last_update == pi.last_complete &&
+	  p->version == pi.last_update) {
+	// Matched peer's head entry - see if we can advance last_update because of partial written shards
+	++p;
+	while (p != ps->pg_log.get_log().log.end()) {
+	  psdout(0) << "BILL_GET_MISSING: log entry " << p->version << " has written_shards " << p->written_shards << dendl;
+	  if (!p->written_shards.empty()&&
+	      !p->written_shards.contains(i->shard)) {
+	    psdout(0) << "BILL_GET_MISSING: log entry advancing last_update because of partial write" << dendl;
+	    ps->peer_info[*i].last_update = p->version;
+	    ps->peer_info[*i].last_complete = p->version;
+	    // Update partial_writes_last_complete, this can be used by proc_replica_info to avoid repeating this work
+	    // and will explain to PeeringState::Stray::react(const MInfoRec& infoevt) why last_update and complete
+	    // have been advanced
+            ps->info.partial_writes_last_complete[i->shard] = p->version;
+	  }
+	  ++p;
+	}
+      }
+      psdout(0) << "BILL_GET_MISSING: " << ps->info.last_complete << " " << pi.last_update << dendl;
     }
 
     if (pi.last_update == pi.last_complete &&  // peer has no missing

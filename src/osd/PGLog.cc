@@ -466,7 +466,7 @@ void PGLog::merge_log(pg_info_t &oinfo, pg_log_t&& olog, pg_shard_t fromosd,
     for (auto &&oe: divergent) {
       dout(10) << "merge_log divergent " << oe << dendl;
     }
-    log.roll_forward_to(log.head, rollbacker);
+    log.roll_forward_to(log.head, &info, rollbacker);
 
     mempool::osd_pglog::list<pg_log_entry_t> new_entries;
     new_entries.splice(new_entries.end(), olog.log, from, to);
@@ -475,6 +475,7 @@ void PGLog::merge_log(pg_info_t &oinfo, pg_log_t&& olog, pg_shard_t fromosd,
       new_entries,
       false,
       &log,
+      &info,
       missing,
       rollbacker,
       this);
@@ -491,7 +492,7 @@ void PGLog::merge_log(pg_info_t &oinfo, pg_log_t&& olog, pg_shard_t fromosd,
     info.last_update = log.head = olog.head;
 
     // We cannot rollback into the new log entries
-    log.skip_can_rollback_to_to_head();
+    log.skip_can_rollback_to_to_head2(&info, rollbacker);
 
     info.last_user_version = oinfo.last_user_version;
     info.purged_snaps = oinfo.purged_snaps;

@@ -349,6 +349,48 @@ void PGBackend::try_stash(
     ghobject_t(hoid, v, get_parent()->whoami_shard().shard));
 }
 
+void PGBackend::partialwrite(
+   pg_info_t *info,
+   const pg_log_entry_t &entry)
+{
+  auto dpp = get_parent()->get_dpp();
+  if (!entry.written_shards.empty()) {
+    // Must provide *info if log contains partial writes and mark it dirty
+    ceph_assert(info != nullptr);
+    // Skip the metadata shards (0 and the coding parity shards)
+    ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW version=" << entry.version << " last_update=" << info->last_update << " last_complete=" << info->last_complete << dendl;
+    ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW partial_writes_last_complete=" << info->partial_writes_last_complete << dendl;
+    for (unsigned int shard = 0; shard < get_parent()->get_pool().size; shard++) {
+      if (!is_metadata_shard(shard_id_t(shard))) {
+        if (!entry.written_shards.contains(shard_id_t(shard))) {
+	  if (!info->partial_writes_last_complete.contains(shard_id_t(shard))) {
+	    // 1st partial write since all logs were updated
+            ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW set shard=" << shard << " entry=" << entry << dendl;
+	    info->partial_writes_last_complete[shard_id_t(shard)] = entry.version;
+	  } else if (info->partial_writes_last_complete[shard_id_t(shard)].version + 1  == entry.version.version) {
+	    // Subsequent partial write, version is sequential
+            ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW inc shard=" << shard << " entry=" << entry << dendl;
+	    info->partial_writes_last_complete[shard_id_t(shard)] = entry.version;
+	  } else {
+	    // Subsequent partial write, discontiguous versions  - recovery will be required
+            ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW discontigt shard=" << shard << " entry=" << entry << dendl;
+	  }
+        } else {
+	  // Log updated, partial write entry not required
+          ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW clear shard=" << shard << " entry=" << entry << dendl;
+          info->partial_writes_last_complete.erase(shard_id_t(shard));
+	}
+      }
+    }
+  } else if (info != nullptr) {
+    // All shard logs updated - no partial write entries not required
+    if (!info->partial_writes_last_complete.empty()) {
+      ldpp_dout(dpp, 0) << __func__ << ": BILL_LOG_PW clear all shards" << dendl;
+    }
+    info->partial_writes_last_complete.clear();
+  }
+}
+
 void PGBackend::remove(
   const hobject_t &hoid,
   ObjectStore::Transaction *t) {
