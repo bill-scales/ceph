@@ -5030,6 +5030,7 @@ void pg_log_entry_t::dump(Formatter *f) const
       f->dump_unsigned("snap", *p);
     f->close_section();
   }
+  f->dump_stream("written_shards") << written_shards;
   {
     f->open_object_section("mod_desc");
     mod_desc.dump(f);
