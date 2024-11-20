@@ -186,16 +186,11 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
     }
   } else {
     ECUtil::shard_extent_set_t &small_set = inner?*inner:will_write;
-    ECUtil::shard_extent_set_t partial_stripe;
     ECUtil::shard_extent_set_t zero;
-    ECUtil::shard_extent_set_t orig;
-
-    sinfo.ro_range_to_shard_extent_set(projected_size,
-      sinfo.logical_to_next_stripe_offset(projected_size), partial_stripe);
+    ECUtil::shard_extent_set_t read_mask;
 
     uint64_t aligned_orig_size = ECUtil::align_page_next(orig_size);
-
-    sinfo.ro_range_to_shard_extent_set(0,orig_size, orig);
+    sinfo.ro_size_to_read_mask(orig_size, read_mask);
 
     /* The zero stripe is any area that gets zeroed if not written to. It is used
      * by appends (old size -> new size) and truncates if truncate.second >
@@ -220,11 +215,10 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
           will_write[shard].insert(zero.at(shard));
         }
 
-        if (!orig.contains(shard))
+        if (!read_mask.contains(shard))
           continue;
 
-        _to_read.intersection_of(outter_extent_superset, orig.at((shard)));
-        _to_read.align(CEPH_PAGE_SIZE);
+        _to_read.intersection_of(outter_extent_superset, read_mask.at((shard)));
 
         if (small_set.contains(shard)) {
           _to_read.subtract(small_set.at(shard));
@@ -611,11 +605,7 @@ void ECTransaction::generate_transactions(
         debug(oid, "overlay_buffer", to_write, dpp);
       }
 
-      extent_set clone_ranges;
-      for (auto &&[shard, eset] : plan.will_write) {
-        clone_ranges.insert(eset);
-      }
-
+      extent_set clone_ranges = plan.will_write.get_extent_superset();
       uint64_t clone_max = ECUtil::align_page_next(plan.orig_size);
 
       if (op.delete_first) {
@@ -627,7 +617,7 @@ void ECTransaction::generate_transactions(
         clone_max = sinfo.logical_to_next_stripe_offset(clone_max);
       }
       uint64_t rollback_max = sinfo.logical_to_next_stripe_offset(clone_max);
-      clone_ranges.erase(rollback_max, 0 - rollback_max - 1);
+      clone_ranges.erase_after(rollback_max);
       for (auto &[start, len] : clone_ranges) {
         rollback_extents.emplace_back(start, len);
       }
@@ -654,23 +644,22 @@ void ECTransaction::generate_transactions(
           eset.intersection_of(clone_ranges);
           shard_id_t shard_id(shard);
 
-          auto &&st = (*transactions)[shard_id];
+          auto &&t = (*transactions)[shard_id];
 
           if (!eset.empty()) {
             entry->written_shards.insert(shard);
-            st.touch(
+            t.touch(
               coll_t(spg_t(pgid, shard_id)),
               ghobject_t(oid, entry->version.version, shard_id));
-          }
-          // First write to this shard
-          for (auto &[start, len] : eset) {
-            st.clone_range(
-              coll_t(spg_t(pgid, shard_id)),
-              ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-              ghobject_t(oid, entry->version.version, shard_id),
-              start,
-              len,
-              start);
+            for (auto &[start, len] : eset) {
+              t.clone_range(
+                coll_t(spg_t(pgid, shard_id)),
+                ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+                ghobject_t(oid, entry->version.version, shard_id),
+                start,
+                len,
+                start);
+            }
           }
         }
 
