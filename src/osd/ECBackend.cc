@@ -1156,31 +1156,32 @@ error:
 
 void ECBackend::handle_sub_write_reply(
   pg_shard_t from,
-  const ECSubWriteReply &op,
+  const ECSubWriteReply &ec_write_reply_op,
   const ZTracer::Trace &trace)
 {
-  map<ceph_tid_t, RMWPipeline::OpRef>::iterator i = rmw_pipeline.tid_to_op_map.find(op.tid);
+  map<ceph_tid_t, RMWPipeline::OpRef>::iterator i = rmw_pipeline.tid_to_op_map.find(ec_write_reply_op.tid);
   ceph_assert(i != rmw_pipeline.tid_to_op_map.end());
-  if (op.committed) {
+  RMWPipeline::OpRef &op = i->second;
+  if (ec_write_reply_op.committed) {
     trace.event("sub write committed");
-    ceph_assert(i->second->pending_commits > 0);
-    i->second->pending_commits--;
+    ceph_assert(op->pending_commits > 0);
+    op->pending_commits--;
     if (from != get_parent()->whoami_shard()) {
-      get_parent()->update_peer_last_complete_ondisk(from, op.last_complete);
+      get_parent()->update_peer_last_complete_ondisk(from, ec_write_reply_op.last_complete);
     }
   }
 
-  if (i->second->pending_commits == 0 &&
-      i->second->on_all_commit &&
-      !i->second->pending_cache_ops) {
-    dout(10) << __func__ << " Calling on_all_commit on " << i->second << dendl;
-    i->second->on_all_commit->complete(0);
-    i->second->on_all_commit = 0;
-    i->second->trace.event("ec write all committed");
+  if (op->pending_commits == 0 &&
+      op->on_all_commit &&
+      !op->pending_cache_ops) {
+    dout(10) << __func__ << " Calling on_all_commit on " << op << dendl;
+    op->on_all_commit->complete(0);
+    op->on_all_commit = 0;
+    op->trace.event("ec write all committed");
   }
   if (cct->_conf->bluestore_debug_inject_read_err &&
-      (i->second->pending_commits == 1) &&
-      ec_inject_test_write_error2(i->second->hoid)) {
+      (op->pending_commits == 1) &&
+      ec_inject_test_write_error2(op->hoid)) {
     std::string cmd =
       "{ \"prefix\": \"osd down\", \"ids\": [\"" + std::to_string( get_parent()->whoami() ) + "\"] }";
     vector<std::string> vcmd{cmd};
@@ -1188,9 +1189,9 @@ void ECBackend::handle_sub_write_reply(
     get_parent()->start_mon_command(vcmd, {}, nullptr, nullptr, nullptr);
   }
 
-  if (i->second->pending_commits == 0)
+  if (op->pending_commits == 0)
   {
-    rmw_pipeline.finish_rmw(tid_to_op_map[tid]);
+    rmw_pipeline.finish_rmw(op);
   }
 }
 

@@ -924,38 +924,38 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
   }
 };
 
-void ECCommon::RMWPipeline::finish_rmw(Op &op)
+void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
 {
-  if (op.pg_committed_to > completed_to)
-    completed_to = op.pg_committed_to;
-  if (op.version > committed_to)
-    committed_to = op.version;
+  if (op->pg_committed_to > completed_to)
+    completed_to = op->pg_committed_to;
+  if (op->version > committed_to)
+    committed_to = op->version;
 
-  for (auto &&[_, c]: op.cache_ops) {
+  for (auto &&[_, c]: op->cache_ops) {
     extent_cache.complete(c);
   }
-  op.cache_ops.clear();
+  op->cache_ops.clear();
 
   if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {
-    if (op.version > get_parent()->get_log().get_can_rollback_to()) {
+    if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       int transactions_since_last_idle = extent_cache.get_and_reset_counter();
-      dout(20) << __func__ << " version=" << op.version << " ec_counter=" << transactions_since_last_idle << dendl;
+      dout(20) << __func__ << " version=" << op->version << " ec_counter=" << transactions_since_last_idle << dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
       auto tid = get_parent()->get_tid();
       auto nop = std::make_shared<ECDummyOp>();
-      nop->hoid = op.hoid;
-      nop->trim_to = op.trim_to;
-      nop->pg_committed_to = op.version;
+      nop->hoid = op->hoid;
+      nop->trim_to = op->trim_to;
+      nop->pg_committed_to = op->version;
       nop->tid = tid;
-      nop->reqid = op.reqid;
+      nop->reqid = op->reqid;
       nop->pending_cache_ops = 1;
       nop->pipeline = this;
 
-      ECExtentCache::OpRef cache_op = extent_cache.prepare(op.hoid,
+      ECExtentCache::OpRef cache_op = extent_cache.prepare(op->hoid,
         std::nullopt,
         ECUtil::shard_extent_set_t(),
-        op.plan.plans.at(op.hoid).orig_size,
-        op.plan.plans.at(op.hoid).projected_size,
+        op->plan.plans.at(op->hoid).orig_size,
+        op->plan.plans.at(op->hoid).projected_size,
         [nop](ECExtentCache::OpRef cache_op)
         {
           nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
@@ -973,7 +973,6 @@ void ECCommon::RMWPipeline::on_change()
 
   completed_to = eversion_t();
   committed_to = eversion_t();
-  waiting_commit.clear();
   tid_to_op_map.clear();
   oid_to_version.clear();
 }

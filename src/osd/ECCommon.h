@@ -652,7 +652,7 @@ struct ECCommon {
     eversion_t committed_to;
     void start_rmw(OpRef op);
     void cache_ready(Op &op);
-    void finish_rmw(Op &op);
+    void finish_rmw(OpRef &op);
 
     void on_change();
     void on_change2();
