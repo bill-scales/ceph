@@ -27,7 +27,8 @@ enum Op {
   IO_OP_WRITE,      // Write
   IO_OP_WRITE2,     // 2 Writes in one op
   IO_OP_WRITE3,     // 3 Writes in one op
-  IO_OP_FAILWRITE   // Fail Write
+  IO_OP_FAILWRITE,  // Fail Write
+  IO_OP_APPEND      // Append
 };
 
 class IoOp {
@@ -174,6 +175,10 @@ public:
     return std::make_unique<IoOp>(IO_OP_FAILWRITE, offset, length);
   }
 
+  static std::unique_ptr<IoOp> generate_append(uint64_t length) {
+    return std::make_unique<IoOp>(IO_OP_APPEND, 0, length);
+  }
+  
   bool done() {
     return (op == IO_OP_DONE);
   }
@@ -222,6 +227,8 @@ public:
     case IO_OP_FAILWRITE:
       return "Fail Write (offset=" + value_to_string(offset1 * block_size) +
 	",length=" + value_to_string(length1 * block_size) + ")";
+    case IO_OP_APPEND:
+      return "Append (length=" + value_to_string(length1 * block_size) + ")";
     default:
       break;
     }

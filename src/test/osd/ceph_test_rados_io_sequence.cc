@@ -72,6 +72,7 @@ const std::string usage[] = {
   "\t\t read|write <off> <len>",
   "\t\t read2|write2 <off> <len> <off> <len>",
   "\t\t read3|write3 <off> <len> <off> <len> <off> <len>",
+  "\t\t append <len>",
   "\t\t done"
 };
 
@@ -471,12 +472,15 @@ public:
 };
 
 
-std::string get_token() {
+std::string get_token(bool allow_eof = false) {
   static std::string line;
   static ceph::split split = ceph::split("");
   static ceph::spliterator tokens;
   while (line.empty() || tokens == split.end()) {
     if (!std::getline(std::cin, line)) {
+      if (allow_eof) {
+	return "done";
+      }
       throw std::runtime_error("End of input");
     }
     split = ceph::split(line);
@@ -527,7 +531,7 @@ void do_interactive( const std::string oid,
   }
 
   while (!done) {
-    const std::string op = get_token();
+    const std::string op = get_token(true);
     if (!op.compare("done")  || !op.compare("q") || !op.compare("quit")) {
       ioop = IoOp::generate_done();
     } else if (!op.compare("create")) {
@@ -576,6 +580,9 @@ void do_interactive( const std::string oid,
       uint64_t offset = get_num_token();
       uint64_t length = get_num_token();
       ioop = IoOp::generate_fail_write(offset, length);
+    } else if (!op.compare("append")) {
+      uint64_t length = get_num_token();
+      ioop = IoOp::generate_append(length);
     } else {
       throw std::runtime_error("Invalid operation "+op);
     }

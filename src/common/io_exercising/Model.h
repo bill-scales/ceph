@@ -203,6 +203,19 @@ public:
       // No model update as the write fails
       num_io++;
       break;
+    case IO_OP_APPEND:
+      {
+	uint64_t oldsize = contents.size();
+	op.offset1 = oldsize;
+	ceph_assert(created);
+	contents.resize(oldsize + op.length1);
+	writes.union_insert(oldsize, op.length1);
+	for (uint64_t i = oldsize; i < contents.size(); i++) {
+	  contents[i] = rng();
+	}
+	num_io++;
+      }
+      break;
     default:
       break;
     }
