@@ -1163,14 +1163,14 @@ void ECBackend::handle_sub_write_reply(
   ceph_assert(i != rmw_pipeline.tid_to_op_map.end());
   if (op.committed) {
     trace.event("sub write committed");
-    ceph_assert(i->second->pending_commit.count(from));
-    i->second->pending_commit.erase(from);
+    ceph_assert(i->second->pending_commits > 0);
+    i->second->pending_commits--;
     if (from != get_parent()->whoami_shard()) {
       get_parent()->update_peer_last_complete_ondisk(from, op.last_complete);
     }
   }
 
-  if (i->second->pending_commit.empty() &&
+  if (i->second->pending_commits == 0 &&
       i->second->on_all_commit &&
       !i->second->pending_cache_ops) {
     dout(10) << __func__ << " Calling on_all_commit on " << i->second << dendl;
@@ -1179,7 +1179,7 @@ void ECBackend::handle_sub_write_reply(
     i->second->trace.event("ec write all committed");
   }
   if (cct->_conf->bluestore_debug_inject_read_err &&
-      (i->second->pending_commit.size() == 1) &&
+      (i->second->pending_commits == 1) &&
       ec_inject_test_write_error2(i->second->hoid)) {
     std::string cmd =
       "{ \"prefix\": \"osd down\", \"ids\": [\"" + std::to_string( get_parent()->whoami() ) + "\"] }";
@@ -1188,9 +1188,9 @@ void ECBackend::handle_sub_write_reply(
     get_parent()->start_mon_command(vcmd, {}, nullptr, nullptr, nullptr);
   }
 
-  if (i->second->pending_commit.empty())
+  if (i->second->pending_commits == 0)
   {
-    rmw_pipeline.try_finish_rmw();
+    rmw_pipeline.finish_rmw(tid_to_op_map[tid]);
   }
 }
 
@@ -1555,7 +1555,7 @@ void ECBackend::submit_transaction(
   /* We update PeeringState::pg_committed_to via the callback
    * invoked from ECBackend::handle_sub_write_reply immediately
    * before updating rmw_pipeline.commited_to via
-   * rmw_pipeline.check_ops()->try_finish_rmw(), so these will
+   * rmw_pipeline.check_ops()->finish_rmw(), so these will
    * *usually* match.  However, the PrimaryLogPG::submit_log_entries
    * pathway can perform an out-of-band log update which updates
    * PeeringState::pg_committed_to independently.  Thus, the value

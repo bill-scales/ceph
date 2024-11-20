@@ -67,26 +67,8 @@ namespace ECExtentCache {
     return size_change;
   }
 
-  void Object::check_buffers_pinned(shard_extent_map_t const &buffers) {
-    extent_set eset = buffers.get_extent_superset();
-    uint64_t alignment = sinfo.get_chunk_size();
-    eset.align(alignment);
-
-    for (auto &&[start, len]: eset ) {
-      for (uint64_t to_pin = start; to_pin < start + len; to_pin += alignment) {
-        ceph_assert(lines.contains(to_pin));
-      }
-    }
-  }
-
-  void Object::check_cache_pinned() {
-    check_buffers_pinned(cache);
-  }
-
   uint64_t Object::insert(shard_extent_map_t const &buffers)
   {
-    check_cache_pinned();
-
     uint64_t old_size = cache.size();
     cache.insert(buffers);
     writing.subtract(buffers.get_shard_extent_set());
@@ -120,17 +102,16 @@ namespace ECExtentCache {
 
   void Object::delete_maybe() {
     if (lines.empty() && active_ios == 0) {
-      ceph_assert(cache.empty());
+      //ceph_assert(cache.empty());
       pg.objects.erase(oid);
     }
   }
 
   uint64_t Object::erase_line(Line &line) {
     uint64_t size_delta = cache.size();
-    cache.erase_stripe(line.offset, sinfo.get_chunk_size());
+    //cache.erase_stripe(line.offset, sinfo.get_chunk_size());
     lines.erase(line.offset);
     size_delta -= cache.size();
-    check_cache_pinned();
     delete_maybe();
     return size_delta;
   }

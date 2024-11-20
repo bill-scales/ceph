@@ -582,10 +582,10 @@ struct ECCommon {
       std::map<hobject_t,ECUtil::shard_extent_map_t> remote_shard_extent_map;
 
       /// In progress write state.
-      std::set<pg_shard_t> pending_commit;
+      int pending_commits = 0;
 
       bool write_in_progress() const {
-        return !pending_commit.empty();
+        return pending_commits != 0;
       }
 
       /// optional, may be null, for tracking purposes
@@ -648,12 +648,11 @@ struct ECCommon {
     std::map<ceph_tid_t, OpRef> tid_to_op_map; /// Owns Op structure
     std::map<hobject_t, eversion_t> oid_to_version;
 
-    op_list waiting_commit;       /// writes waiting on initial commit
     eversion_t completed_to;
     eversion_t committed_to;
     void start_rmw(OpRef op);
     void cache_ready(Op &op);
-    void try_finish_rmw();
+    void finish_rmw(Op &op);
 
     void on_change();
     void on_change2();

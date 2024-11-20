@@ -159,7 +159,7 @@ ostream &operator<<(ostream &lhs, const ECCommon::RMWPipeline::Op &rhs)
       << " temp_added=" << rhs.temp_added
       << " temp_cleared=" << rhs.temp_cleared
       << " remote_read_result=" << rhs.remote_shard_extent_map
-      << " pending_commit=" << rhs.pending_commit
+      << " pending_commits=" << rhs.pending_commits
       << " plan.to_read=" << rhs.plan
       << ")";
   return lhs;
@@ -757,8 +757,6 @@ void ECCommon::RMWPipeline::start_rmw(OpRef op)
 
 void ECCommon::RMWPipeline::cache_ready(Op &op)
 {
-  waiting_commit.push_back(op);
-
   get_parent()->apply_stats(
     op.hoid,
     op.delta_stats);
@@ -808,6 +806,7 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
     oid_to_version[op.hoid] = op.version;
   }
   for (auto &&pg_shard : get_parent()->get_acting_recovery_backfill_shards()) {
+    op.pending_commits++;
     auto iter = trans.find(pg_shard.shard);
     ceph_assert(iter != trans.end());
     if (iter->second.empty()) {
@@ -925,54 +924,46 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
   }
 };
 
-void ECCommon::RMWPipeline::try_finish_rmw()
+void ECCommon::RMWPipeline::finish_rmw(Op &op)
 {
-  while (!waiting_commit.empty() && waiting_commit.front().pending_commit.empty())
-  {
-    Op &op = waiting_commit.front();
-    waiting_commit.pop_front();
+  if (op.pg_committed_to > completed_to)
+    completed_to = op.pg_committed_to;
+  if (op.version > committed_to)
+    committed_to = op.version;
 
-    if (op.pg_committed_to > completed_to)
-      completed_to = op.pg_committed_to;
-    if (op.version > committed_to)
-      committed_to = op.version;
+  for (auto &&[_, c]: op.cache_ops) {
+    extent_cache.complete(c);
+  }
+  op.cache_ops.clear();
 
-    for (auto &&[_, c]: op.cache_ops) {
-      extent_cache.complete(c);
+  if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {
+    if (op.version > get_parent()->get_log().get_can_rollback_to()) {
+      int transactions_since_last_idle = extent_cache.get_and_reset_counter();
+      dout(20) << __func__ << " version=" << op.version << " ec_counter=" << transactions_since_last_idle << dendl;
+      // submit a dummy, transaction-empty op to kick the rollforward
+      auto tid = get_parent()->get_tid();
+      auto nop = std::make_shared<ECDummyOp>();
+      nop->hoid = op.hoid;
+      nop->trim_to = op.trim_to;
+      nop->pg_committed_to = op.version;
+      nop->tid = tid;
+      nop->reqid = op.reqid;
+      nop->pending_cache_ops = 1;
+      nop->pipeline = this;
+
+      ECExtentCache::OpRef cache_op = extent_cache.prepare(op.hoid,
+        std::nullopt,
+        ECUtil::shard_extent_set_t(),
+        op.plan.plans.at(op.hoid).orig_size,
+        op.plan.plans.at(op.hoid).projected_size,
+        [nop](ECExtentCache::OpRef cache_op)
+        {
+          nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
+          nop->cache_ready(nop->hoid, std::nullopt);
+        });
+
+      tid_to_op_map[tid] = std::move(nop);
     }
-    op.cache_ops.clear();
-
-    if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {
-      if (op.version > get_parent()->get_log().get_can_rollback_to()) {
-        int transactions_since_last_idle = extent_cache.get_and_reset_counter();
-        dout(20) << __func__ << " version=" << op.version << " ec_counter=" << transactions_since_last_idle << dendl;
-        // submit a dummy, transaction-empty op to kick the rollforward
-        auto tid = get_parent()->get_tid();
-        auto nop = std::make_shared<ECDummyOp>();
-        nop->hoid = op.hoid;
-        nop->trim_to = op.trim_to;
-        nop->pg_committed_to = op.version;
-        nop->tid = tid;
-        nop->reqid = op.reqid;
-        nop->pending_cache_ops = 1;
-        nop->pipeline = this;
-
-        ECExtentCache::OpRef cache_op = extent_cache.prepare(op.hoid,
-          std::nullopt,
-          ECUtil::shard_extent_set_t(),
-          op.plan.plans.at(op.hoid).orig_size,
-          op.plan.plans.at(op.hoid).projected_size,
-          [nop](ECExtentCache::OpRef cache_op)
-          {
-            nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
-            nop->cache_ready(nop->hoid, std::nullopt);
-          });
-
-        tid_to_op_map[tid] = std::move(nop);
-      }
-    }
-
-    tid_to_op_map.erase(op.tid);
   }
 }
 
