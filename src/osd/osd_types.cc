@@ -1634,6 +1634,7 @@ void pg_pool_t::dump(Formatter *f) const
   f->dump_unsigned("stripe_width", get_stripe_width());
   f->dump_unsigned("expected_num_objects", expected_num_objects);
   f->dump_bool("fast_read", fast_read);
+  f->dump_stream("nonprimary_shards") << nonprimary_shards;
   f->open_object_section("options");
   opts.dump(f);
   f->close_section(); // options
@@ -1953,7 +1954,7 @@ void pg_pool_t::encode(ceph::buffer::list& bl, uint64_t features) const
     return;
   }
 
-  uint8_t v = 30;
+  uint8_t v = 31;
   // NOTE: any new encoding dependencies must be reflected by
   // SIGNIFICANT_FEATURES
   if (!(features & CEPH_FEATURE_NEW_OSDOP_ENCODING)) {
@@ -1966,8 +1967,10 @@ void pg_pool_t::encode(ceph::buffer::list& bl, uint64_t features) const
     v = 26;
   } else if (!HAVE_FEATURE(features, SERVER_NAUTILUS)) {
     v = 27;
-  } else if (!is_stretch_pool()) {
+  } else if (!is_stretch_pool() && !allows_ecoptimizations()) {
     v = 29;
+  } else if (!allows_ecoptimizations()) {
+    v = 30;
   }
 
   ENCODE_START(v, 5, bl);
@@ -2064,12 +2067,15 @@ void pg_pool_t::encode(ceph::buffer::list& bl, uint64_t features) const
     encode(peering_crush_bucket_barrier, bl);
     encode(peering_crush_mandatory_member, bl);
   }
+  if (v >= 31) {
+    encode(nonprimary_shards, bl);
+  }
   ENCODE_FINISH(bl);
 }
 
 void pg_pool_t::decode(ceph::buffer::list::const_iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(30, 5, 5, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(31, 5, 5, bl);
   decode(type, bl);
   decode(size, bl);
   decode(crush_rule, bl);
@@ -2250,6 +2256,11 @@ void pg_pool_t::decode(ceph::buffer::list::const_iterator& bl)
     decode(peering_crush_bucket_barrier, bl);
     decode(peering_crush_mandatory_member, bl);
   }
+  if (struct_v >= 31) {
+    decode(nonprimary_shards, bl);
+  } else {
+    nonprimary_shards.clear();
+  }
   DECODE_FINISH(bl);
   calc_pg_masks();
   calc_grade_table();
@@ -2351,6 +2362,7 @@ void pg_pool_t::generate_test_instances(list<pg_pool_t*>& o)
   a.erasure_code_profile = "profile in osdmap";
   a.expected_num_objects = 123456;
   a.fast_read = false;
+  a.nonprimary_shards.clear();
   a.application_metadata = {{"rbd", {{"key", "value"}}}};
   o.push_back(new pg_pool_t(a));
 }
@@ -3620,7 +3632,7 @@ void pg_info_t::decode(ceph::buffer::list::const_iterator &bl)
 void pg_info_t::dump(Formatter *f) const
 {
   f->dump_stream("pgid") << pgid;
-  f->dump_stream("shared") << pgid.shard;
+  f->dump_stream("shard") << pgid.shard;
   f->dump_stream("last_update") << last_update;
   f->dump_stream("last_complete") << last_complete;
   f->dump_stream("log_tail") << log_tail;
@@ -5319,7 +5331,7 @@ static void _handle_dups(CephContext* cct, pg_log_t &target, const pg_log_t &oth
 }
 
 
-void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v, shard_id_t shard)
+void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v, const pg_pool_t &pool, shard_id_t shard)
 {
   can_rollback_to = other.can_rollback_to;
   head = other.head;
@@ -5329,8 +5341,7 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v,
 				 << " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (!i->written_shards.empty()&&
-	!i->written_shards.contains(shard)) {
+    if (pool.is_nonprimary_shard(shard) && !i->is_written_shard(shard)) {
       lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYAFTER: skipping partial write log version " << i->version << " " << i->written_shards << dendl;
     } else {
       if (i->version <= v) {
@@ -5348,7 +5359,7 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v,
 				 << " other.dups.size()=" << other.dups.size() << dendl;
 }
 
-void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, shard_id_t shard)
+void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, const pg_pool_t &pool, shard_id_t shard)
 {
   can_rollback_to = other.can_rollback_to;
   int n = 0;
@@ -5359,8 +5370,7 @@ void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, shar
 				<< " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (!i->written_shards.empty()&&
-	!i->written_shards.contains(shard)) {
+    if (pool.is_nonprimary_shard(shard) && !i->is_written_shard(shard)) {
       lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYUPTO: skipping partial write log version " << i->version << dendl;
     } else {
       if (n++ >= max) {

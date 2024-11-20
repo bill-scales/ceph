@@ -492,7 +492,7 @@ void PGLog::merge_log(pg_info_t &oinfo, pg_log_t&& olog, pg_shard_t fromosd,
     info.last_update = log.head = olog.head;
 
     // We cannot rollback into the new log entries
-    log.skip_can_rollback_to_to_head2(&info, rollbacker);
+    log.skip_can_rollback_to_to_head();
 
     info.last_user_version = oinfo.last_user_version;
     info.purged_snaps = oinfo.purged_snaps;

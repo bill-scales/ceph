@@ -722,7 +722,7 @@ void ECTransaction::generate_transactions(
 	      }
 	      unwritten_shard++;
 	    }
-	    if (!sinfo.is_metadata_shard(written_shard)) {
+	    if (sinfo.is_nonprimary_shard(shard_id_t(written_shard))) {
 	      if (oi.shard_versions.erase(shard_id_t(written_shard))) {
 		update = true;
 	      }
@@ -782,14 +782,13 @@ void ECTransaction::generate_transactions(
 	  }
 	}
 	for (auto &&st : *transactions) {
-	  if (sinfo.is_metadata_shard(st.first)) {
+	  if (!sinfo.is_nonprimary_shard(st.first)) {
 	    // Update all attributes
 	    st.second.setattrs(
 	      coll_t(spg_t(pgid, st.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
 	      to_set);
-	  } else if (entry->written_shards.contains(st.first)||
-		     entry->written_shards.empty()) {
+	  } else if (entry->is_written_shard(st.first)) {
 	    // Only update object_info attribute
 	    st.second.setattr(
 	      coll_t(spg_t(pgid, st.first)),
@@ -808,7 +807,7 @@ void ECTransaction::generate_transactions(
 	bufferlist hbuf;
 	encode(*hinfo, hbuf);
 	for (auto &&i : *transactions) {
-	  if (sinfo.is_metadata_shard(i.first)) {
+	  if (!sinfo.is_nonprimary_shard(i.first)) {
 	    i.second.setattr(
 	      coll_t(spg_t(pgid, i.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, i.first),
@@ -818,14 +817,4 @@ void ECTransaction::generate_transactions(
 	}
       }
     });
-#if 0
-  //FIXME: This doesn't work because write_plan_validation is writing the
-  //same amount to each shard so writes too much for partial stripe writes
-  //that span a stripe boundary.
-
-  // Validate the transactions match the write plan
-  ldpp_dout(dpp, 0) << __func__ << " BILL5 vwp: " << write_plan_validation << dendl;
-  ldpp_dout(dpp, 0) << __func__ << " BILL5 wp: " << plan.will_write << dendl;
-  ceph_assert(write_plan_validation == plan.will_write);
-#endif
 }

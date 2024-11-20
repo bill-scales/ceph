@@ -208,12 +208,6 @@ std::ostream& operator<<(std::ostream &lhs, const pg_shard_t &rhs);
 
 using HobjToShardSetMapping = std::map<hobject_t, std::set<pg_shard_t>>;
 
-class MayActAsPrimaryPredicate {
-public:
-  virtual bool operator()(const pg_shard_t shard) const = 0;
-  virtual ~MayActAsPrimaryPredicate() {}
-};
-
 class IsPGRecoverablePredicate {
 public:
   /**
@@ -1599,7 +1593,7 @@ public:
   uint64_t expected_num_objects = 0; ///< expected number of objects on this pool, a value of 0 indicates
                                      ///< user does not specify any expected value
   bool fast_read = false;            ///< whether turn on fast read on the pool or not
-
+  std::vector<bool> nonprimary_shards; ///< EC partial writes: shards that cannot become a primary
   pool_opts_t opts; ///< options
 
   typedef enum {
@@ -1903,6 +1897,11 @@ public:
 
   /// choose a random hash position within a pg
   uint32_t get_random_pg_position(pg_t pgid, uint32_t seed) const;
+
+  /// EC partial writes: test if a shard is a non-primary
+  bool is_nonprimary_shard(const shard_id_t shard) const {
+    return !nonprimary_shards.empty() && nonprimary_shards.at(shard);
+  }
 
   void encode(ceph::buffer::list& bl, uint64_t features) const;
   void decode(ceph::buffer::list::const_iterator& bl);
@@ -4489,6 +4488,12 @@ struct pg_log_entry_t {
   }
 
   std::string get_key_name() const;
+
+  /// EC partial writes: test if a shard was written
+  bool is_written_shard(const shard_id_t shard) const {
+    return written_shards.empty() || written_shards.contains(shard);
+  }
+
   void encode_with_checksum(ceph::buffer::list& bl) const;
   void decode_with_checksum(ceph::buffer::list::const_iterator& p);
 
@@ -4735,18 +4740,20 @@ public:
    *
    * @param other pg_log_t to copy from
    * @param from copy entries after this version
+   * @param pool
    * @param shard shard that is receiving the entries
    */
-  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from, shard_id_t shard);
+  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from, const pg_pool_t &pool, shard_id_t shard);
 
   /**
    * copy up to N entries
    *
    * @param other source log
    * @param max max number of entries to copy
+   * @param pool
    * @param shard shard that is receiving the entries
    */
-  void copy_up_to(CephContext* cct, const pg_log_t &other, int max, shard_id_t shard);
+  void copy_up_to(CephContext* cct, const pg_log_t &other, int max, const pg_pool_t &pool, shard_id_t shard);
 
   std::ostream& print(std::ostream& out) const;
 

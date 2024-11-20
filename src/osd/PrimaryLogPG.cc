@@ -1776,8 +1776,7 @@ PrimaryLogPG::PrimaryLogPG(OSDService *o, OSDMapRef curmap,
 {
   recovery_state.set_backend_predicates(
     pgbackend->get_is_readable_predicate(),
-    pgbackend->get_is_recoverable_predicate(),
-    pgbackend->get_act_as_primary_predicate());
+    pgbackend->get_is_recoverable_predicate());
   snap_trimmer_machine.initiate();
 
   m_scrubber = make_unique<PrimaryLogScrub>(this);
@@ -13899,8 +13898,7 @@ uint64_t PrimaryLogPG::recover_backfill(
   uint64_t max,
   ThreadPool::TPHandle &handle, bool *work_started)
 {
-  dout(0) << "BILLBACKFILL: recover_backfill" << dendl;
-  dout(10) << __func__ << " (" << max << ")"
+  dout(10) << __func__ << " BILLBACKFILL: (" << max << ")"
            << " bft=" << get_backfill_targets()
 	   << " last_backfill_started " << last_backfill_started
 	   << (new_backfill ? " new_backfill":"")
@@ -14056,9 +14054,6 @@ uint64_t PrimaryLogPG::recover_backfill(
 	++it;
       }
       dout(0) << "BILL:BACKFILL: versions = " << versions << dendl;
-      //BILL: This has been rewritten to cope with more than one backfill target
-      //      eversion_t& obj_v = backfill_info.objects.begin()->second.second;
-
       vector<pg_shard_t> need_ver_targs, missing_targs, keep_ver_targs, skip_targs;
       for (set<pg_shard_t>::const_iterator i = get_backfill_targets().begin();
 	   i != get_backfill_targets().end();
@@ -14371,7 +14366,8 @@ void PrimaryLogPG::update_range(
 	    // Update entries in map that are modified by log entry
             bool uses_default = false;
             for (auto & shard : backfill_targets) {
-	      if (e.written_shards.contains(shard.shard)) {
+	      if (!pool.info.is_nonprimary_shard(shard.shard) ||
+		  e.is_written_shard(shard.shard)) {
 		versions[shard.shard] = e.version;
 	      } else if (!versions.contains(shard.shard)) {
 		uses_default = true;
@@ -14408,8 +14404,8 @@ void PrimaryLogPG::scan_range_primary(
   const std::set<pg_shard_t> &backfill_targets)
 {
   ceph_assert(is_locked());
-  dout(0) << "BILLBACKFILL: scan_range_primary " << backfill_targets << dendl;
-  dout(10) << "scan_range_primary from " << bi->begin << dendl;
+  dout(10) << "BILLBACKFILL: scan_range_primary from " << bi->begin <<
+              " backfill_targets " << backfill_targets << dendl;
   bi->clear_objects();
 
   vector<hobject_t> ls;
@@ -14421,14 +14417,21 @@ void PrimaryLogPG::scan_range_primary(
 
   for (vector<hobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
     handle.reset_tp_timeout();
+//FIXME: BILL: Delete this - assert shows this only runs on a primary
+#if 0
     ObjectContextRef obc;
     eversion_t version;
     std::map<shard_id_t,eversion_t> shard_versions;
 
-    //FIXME: BILL: This only runs on a primary - lets assert this
-    ceph_assert(is_primary());
     if (is_primary())
       obc = object_contexts.lookup(*p);
+#endif
+    ceph_assert(is_primary());
+
+    eversion_t version;
+    std::map<shard_id_t,eversion_t> shard_versions;
+    ObjectContextRef obc = object_contexts.lookup(*p);
+
     if (obc) {
       if (!obc->obs.exists) {
 	/* If the object does not exist here, it must have been removed
@@ -14478,8 +14481,7 @@ void PrimaryLogPG::scan_range_replica(
   ThreadPool::TPHandle &handle)
 {
   ceph_assert(is_locked());
-  dout(0) << "BILLBACKFILL: scan_range_replica" << dendl;
-  dout(10) << "scan_range_replica from " << bi->begin << dendl;
+  dout(10) << "BILLBACKFILL: scan_range_replica from " << bi->begin << dendl;
   bi->clear_objects();
 
   vector<hobject_t> ls;
@@ -14491,9 +14493,11 @@ void PrimaryLogPG::scan_range_replica(
 
   for (vector<hobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
     handle.reset_tp_timeout();
+//FIXME: BILL: Delete this - assert shows this doesn't run on primary
+#if 0
     ObjectContextRef obc;
     eversion_t version;
-    //FIXME: BILL: This runs on a replica - it can't be the primary - lets assert this
+
     ceph_assert(!is_primary());
     if (is_primary())
       obc = object_contexts.lookup(*p);
@@ -14522,6 +14526,21 @@ void PrimaryLogPG::scan_range_replica(
     }
     bi->objects[*p] = version;
     dout(20) << "  BILLBACKFILL: adding " << *p << " " << version << dendl;
+#endif
+    ceph_assert(!is_primary());
+    bufferlist bl;
+    int r = pgbackend->objects_get_attr(*p, OI_ATTR, &bl);
+    /* If the object does not exist here, it must have been removed
+     * between the collection_list_partial and here.  This can happen
+     * for the first item in the range, which is usually last_backfill.
+     */
+    if (r == -ENOENT)
+      continue;
+
+    ceph_assert(r >= 0);
+    object_info_t oi(bl);
+    bi->objects[*p] = oi.version;
+    dout(20) << "  BILLBACKFILL: adding " << *p << " " << oi.version << dendl;
   }
 }
 

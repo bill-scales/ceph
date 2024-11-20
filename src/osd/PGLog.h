@@ -247,7 +247,6 @@ public:
 	to,
 	[&](pg_log_entry_t &entry) {
 	  h->trim(entry);
-	  //FIXME: BILL: I don't think we need to do partialwrite here as well as in roll_forward_to??
 	  h->partialwrite(info, entry);
 	});
     }
@@ -258,14 +257,6 @@ public:
 	  h->rollforward(entry);
 	  h->partialwrite(info, entry);
 	});
-    }
-
-    void skip_can_rollback_to_to_head2(pg_info_t *info, LogEntryHandler *h) {
-      //FIXME: BILL: I don't think we need to do partialwrite here?
-      advance_can_rollback_to(head,
-			      [&](const pg_log_entry_t &entry) {
-			        h->partialwrite(info, entry);
-			      });
     }
 
     void skip_can_rollback_to_to_head() {

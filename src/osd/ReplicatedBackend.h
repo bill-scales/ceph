@@ -66,16 +66,6 @@ public:
   void on_change() override;
   void clear_recovery_state() override;
 
-  class RPCActAsPrimaryPred : public MayActAsPrimaryPredicate {
-  public:
-    bool operator()(const pg_shard_t shard) const override {
-      return true;
-    }
-  };
-  MayActAsPrimaryPredicate *get_act_as_primary_predicate() const override {
-    return new RPCActAsPrimaryPred;
-  }
-
   class RPCRecPred : public IsPGRecoverablePredicate {
   public:
     bool operator()(const std::set<pg_shard_t> &have) const override {

@@ -893,9 +893,9 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
       trans.find(i->shard);
     ceph_assert(iter != trans.end());
     if (iter->second.empty()) {
-      dout(0) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " is empty!" << dendl;
+      dout(20) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " is empty" << dendl;
     } else {
-      dout(0) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " contents ";
+      dout(20) << " BILL: Transaction for osd." << i->osd << " shard " << iter->first << " contents ";
       Formatter *f = Formatter::create("json");
       f->open_object_section("t");
       iter->second.dump(f);

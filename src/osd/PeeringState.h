@@ -1808,11 +1808,9 @@ public:
   /// Std::set predicates used for determining readable and recoverable
   void set_backend_predicates(
     IsPGReadablePredicate *is_readable,
-    IsPGRecoverablePredicate *is_recoverable,
-    MayActAsPrimaryPredicate *act_as_primary) {
+    IsPGRecoverablePredicate *is_recoverable) {
     missing_loc.set_backend_predicates(is_readable,
-				       is_recoverable,
-				       act_as_primary);
+				       is_recoverable);
   }
 
   /// Send current pg_info to peers

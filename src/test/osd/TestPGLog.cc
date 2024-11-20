@@ -3083,6 +3083,7 @@ TEST_F(PGLogTrimTest, TestTrimDups2) {
 TEST_F(PGLogTrimTest, TestCopyUpTo) {
   SetUp(5);
   PGLog::IndexedLog log, copy;
+  pg_pool_t pool;
   log.tail = mk_evt(9, 99);
   log.head = mk_evt(9, 99);
 
@@ -3108,7 +3109,7 @@ TEST_F(PGLogTrimTest, TestCopyUpTo) {
   log.add(mk_ple_dt_rb(mk_obj(5), mk_evt(21, 107), mk_evt(21, 106),
 		       osd_reqid_t(client, 8, 6)));
 
-  copy.copy_up_to(cct, log, 2, shard_id_t::NO_SHARD);
+  copy.copy_up_to(cct, log, 2, pool, shard_id_t::NO_SHARD);
 
   EXPECT_EQ(2u, copy.log.size()) << copy;
   EXPECT_EQ(copy.head, mk_evt(21, 107)) << copy;
@@ -3123,6 +3124,7 @@ TEST_F(PGLogTrimTest, TestCopyUpTo) {
 TEST_F(PGLogTrimTest, TestCopyUpTo2) {
   SetUp(9);
   PGLog::IndexedLog log, copy;
+  pg_pool_t pool;
   log.tail = mk_evt(9, 99);
   log.head = mk_evt(9, 99);
 
@@ -3150,7 +3152,7 @@ TEST_F(PGLogTrimTest, TestCopyUpTo2) {
   log.add(mk_ple_dt_rb(mk_obj(5), mk_evt(21, 107), mk_evt(21, 106),
 		       osd_reqid_t(client, 8, 6)));
 
-  copy.copy_up_to(cct, log, 4, shard_id_t::NO_SHARD);
+  copy.copy_up_to(cct, log, 4, pool, shard_id_t::NO_SHARD);
 
   EXPECT_EQ(4u, copy.log.size()) << copy;
   EXPECT_EQ(copy.head, mk_evt(21, 107)) << copy;
@@ -3165,6 +3167,7 @@ TEST_F(PGLogTrimTest, TestCopyUpTo2) {
 TEST_F(PGLogTrimTest, TestCopyAfter) {
   SetUp(5);
   PGLog::IndexedLog log, copy;
+  pg_pool_t pool;
   log.tail = mk_evt(9, 99);
   log.head = mk_evt(9, 99);
 
@@ -3190,7 +3193,7 @@ TEST_F(PGLogTrimTest, TestCopyAfter) {
   log.add(mk_ple_dt_rb(mk_obj(5), mk_evt(21, 107), mk_evt(21, 106),
 		       osd_reqid_t(client, 8, 6)));
 
-  copy.copy_after(cct, log, mk_evt(21, 105), shard_id_t::NO_SHARD);
+  copy.copy_after(cct, log, mk_evt(21, 105), pool, shard_id_t::NO_SHARD);
 
   EXPECT_EQ(2u, copy.log.size()) << copy;
   EXPECT_EQ(copy.head, mk_evt(21, 107)) << copy;
@@ -3204,6 +3207,7 @@ TEST_F(PGLogTrimTest, TestCopyAfter) {
 TEST_F(PGLogTrimTest, TestCopyAfter2) {
   SetUp(3000);
   PGLog::IndexedLog log, copy;
+  pg_pool_t pool;
   log.tail = mk_evt(9, 99);
   log.head = mk_evt(9, 99);
 
@@ -3241,7 +3245,7 @@ TEST_F(PGLogTrimTest, TestCopyAfter2) {
   log.add(mk_ple_dt_rb(mk_obj(5), mk_evt(21, 107), mk_evt(21, 106),
 		       osd_reqid_t(client, 8, 6)));
 
-  copy.copy_after(cct, log, mk_evt(9, 99), shard_id_t::NO_SHARD);
+  copy.copy_after(cct, log, mk_evt(9, 99), pool, shard_id_t::NO_SHARD);
 
   EXPECT_EQ(8u, copy.log.size()) << copy;
   EXPECT_EQ(copy.head, mk_evt(21, 107)) << copy;

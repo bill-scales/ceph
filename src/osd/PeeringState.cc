@@ -1546,8 +1546,8 @@ map<pg_shard_t, pg_info_t>::const_iterator PeeringState::find_best_info(
     if (p->second.is_incomplete())
       continue;
     // Erasure code may restrict the choice of acting primary
-    if (!missing_loc.get_act_as_primary_predicate()(p->first)) {
-      psdout(0) << "BILLFINDBESTINFO: Skipping non-metadata shard " << p->first << dendl;
+    if (pool.info.is_nonprimary_shard(p->first.shard)) {
+      psdout(0) << "BILLFINDBESTINFO: Skipping non-primary shard " << p->first << dendl;
       continue;
     }
     if (best == infos.end()) {
@@ -2870,7 +2870,7 @@ void PeeringState::activate(
 
 	// send some recent log, so that op dup detection works well.
 	m->log.copy_up_to(cct, pg_log.get_log(),
-			  cct->_conf->osd_max_pg_log_entries, i->shard);
+			  cct->_conf->osd_max_pg_log_entries, pool.info, i->shard);
 	m->info.log_tail = m->log.tail;
 	pi.log_tail = m->log.tail;  // sigh...
 
@@ -2883,7 +2883,7 @@ void PeeringState::activate(
 	  get_osdmap_epoch(), info,
 	  last_peering_reset /* epoch to create pg at */);
 	// send new stuff to append to replicas log
-	m->log.copy_after(cct, pg_log.get_log(), pi.last_update, i->shard);
+	m->log.copy_after(cct, pg_log.get_log(), pi.last_update, pool.info, i->shard);
       }
 
       // share past_intervals if we are creating the pg on the replica
@@ -3207,7 +3207,7 @@ void PeeringState::fulfill_log(
 			     << ", sending full log instead";
       mlog->log = pg_log.get_log();           // primary should not have requested this!!
     } else
-      mlog->log.copy_after(cct, pg_log.get_log(), query.since, from.shard);
+      mlog->log.copy_after(cct, pg_log.get_log(), query.since, pool.info, from.shard);
   }
   else if (query.type == pg_query_t::FULLLOG) {
     psdout(10) << " sending info+missing+full log" << dendl;
@@ -6678,8 +6678,8 @@ boost::statechart::result PeeringState::Stray::react(const MInfoRec& infoevt)
   if (infoevt.info.last_update > ps->info.last_update) {
     // Log is missing entries, this is only allowed if the missing entries are all partial writes that did not update this shard
     psdout(0) << "BILLSTRAYREACT osd." << infoevt.from << " has last_update " << infoevt.info.last_update << " but we are behind at " << ps->info.last_update << " hopefully partial_write_last_complete says that is expected" << dendl;
-    // Must be a non-metadata shard
-    ceph_assert(!ps->missing_loc.get_act_as_primary_predicate()(ps->pg_whoami));
+    // Must be a non-primary shard
+    ceph_assert(ps->pool.info.is_nonprimary_shard(ps->pg_whoami.shard));
     // There must be a partial write last_complete entry for this shard
     ceph_assert(infoevt.info.partial_writes_last_complete.contains(ps->pg_whoami.shard));
     // Last complete must match the partial write last_complete
@@ -7403,8 +7403,7 @@ PeeringState::GetMissing::GetMissing(my_context ctx)
 	++p;
 	while (p != ps->pg_log.get_log().log.end()) {
 	  psdout(0) << "BILL_GET_MISSING: log entry " << p->version << " has written_shards " << p->written_shards << dendl;
-	  if (!p->written_shards.empty()&&
-	      !p->written_shards.contains(i->shard)) {
+	  if (!p->is_written_shard(i->shard)) {
 	    psdout(0) << "BILL_GET_MISSING: log entry advancing last_update because of partial write" << dendl;
 	    ps->peer_info[*i].last_update = p->version;
 	    ps->peer_info[*i].last_complete = p->version;

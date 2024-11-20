@@ -1,3 +1,4 @@
+
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
@@ -8816,20 +8817,50 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
     }
   } else if (var == "allow_ec_optimizations") {
     if (!p.is_erasure()) {
-      ss << "ec optimizations can only be enabled for an erasure coded pool";
+      ss << "allow_ec_optimizations can only be enabled for an erasure coded pool";
       return -EINVAL;
     }
-    //FIXME: Should be checking for tentacle
+    //FIXME: BILL: Should be checking for tentacle
     if (osdmap.require_osd_release < ceph_release_t::squid) {
       ss << "must set require_osd_release to tentacle or "
            << "later before setting allow_ec_optimizations";
         return -EINVAL;
       }
     if (val == "true" || (interr.empty() && n == 1)) {
-	p.flags |= pg_pool_t::FLAG_EC_OPTIMIZATIONS;
+       ErasureCodeInterfaceRef erasure_code;
+       unsigned int k, m, total;
+       stringstream tmp;
+       int err = get_erasure_code(p.erasure_code_profile, &erasure_code, &tmp);
+       if (err == 0) {
+	 k = erasure_code->get_data_chunk_count();
+	 m = erasure_code->get_coding_chunk_count();
+	 total = erasure_code->get_chunk_count();
+       } else {
+	 ss << "get_erasure_code failed: " << tmp.str();
+	 return -EINVAL;
+       }
+       // Restrict the set of shards that can be a primary to the 1st data
+       // raw_shard (raw_shard 0) and the coding parity raw_shards because
+       // the other shards (including local parity for LRC) may not have
+       // up to date copies of xattrs including OI
+       p.nonprimary_shards.clear();
+       p.nonprimary_shards.resize(total, true);
+       for (unsigned int raw_shard = 0; raw_shard < k + m; raw_shard++) {
+	 shard_id_t shard;
+	 if (raw_shard > 0 && raw_shard < k) {
+	   continue;
+	 }
+	 if (erasure_code->get_chunk_mapping().size() > raw_shard ) {
+	   shard = shard_id_t(erasure_code->get_chunk_mapping().at(raw_shard));
+	 } else {
+	   shard = shard_id_t(raw_shard);
+	 }
+	 p.nonprimary_shards[shard] = false;
+       }
+       p.flags |= pg_pool_t::FLAG_EC_OPTIMIZATIONS;
     } else if (val == "false" || (interr.empty() && n == 0)) {
       if ((p.flags & pg_pool_t::FLAG_EC_OPTIMIZATIONS) != 0) {
-	ss << "ec optimizations cannot be disabled once enabled";
+	ss << "allow_ec_optimizations cannot be disabled once enabled";
 	return -EINVAL;
       }
     } else {

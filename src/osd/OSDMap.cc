@@ -2695,21 +2695,12 @@ void OSDMap::_pg_to_raw_osds(
 int OSDMap::_pick_primary(const pg_pool_t& pool, const vector<int>& osds) const
 {
   if (pool.has_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS)) {
-    // Restrict choice of primary to data shard 0 or one of the coding parities
-    // FIXME: Bug - Needs to consider EC mapping
-    // FIXME: Concern - Observed that turning on the pool flag does cause an epoch and will move primaries, need to understand how this is working
-    // FIXME: Concern - is there a split brain issue here? Do all OSDs have the same pool info for an epoch?
-    // FIXME: Concern - does EC profile have to specify k? Do we need to police this when setting flag/changing profile?
-    // FIXME: Messy - Has PG been created by the time this is called? If yes we can find PG and call ECBackend to do some of ths work, if not it will be messy
-    auto& ecp = get_erasure_code_profile(pool.erasure_code_profile);
-    auto pk = ecp.find("k");
-    ceph_assert(pk != ecp.end());
-    int k = atoi(pk->second.c_str());
-    int count = 0;
+    ceph_assert(!pool.nonprimary_shards.empty());
+    int shard = 0;
     for (auto osd : osds) {
-      count++;
-      if (count != 1 && count <= k) {
-	continue; // BILL: Hack - cannot be primary
+      if (pool.is_nonprimary_shard(shard_id_t(shard++))) {
+	// Shard cannot be a primary
+	continue;
       }
       if (osd != CRUSH_ITEM_NONE) {
 	return osd;
@@ -2898,8 +2889,10 @@ void OSDMap::_get_temp_osds(const pg_pool_t& pool, pg_t pg,
     *temp_primary = pp->second;
   } else if (!temp_pg->empty()) { // apply pg_temp's primary
     for (unsigned i = 0; i < temp_pg->size(); ++i) {
-      //FIXME: BILL HACK - STOP shard 1 being acting shard
-      if (i==1) continue;
+      if (pool.is_nonprimary_shard(shard_id_t(i))) {
+	// Shard cannot be a primary
+	continue;
+      }
       if ((*temp_pg)[i] != CRUSH_ITEM_NONE) {
 	*temp_primary = (*temp_pg)[i];
 	break;
