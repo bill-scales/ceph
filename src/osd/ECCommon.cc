@@ -305,7 +305,6 @@ int ECCommon::ReadPipeline::get_min_avail_to_read_shards(
   }
 
   extent_set extra_extents;
-  extent_set read_superset;
   ECUtil::shard_extent_set_t read_mask;
   ECUtil::shard_extent_set_t zero_mask;
 
@@ -313,8 +312,6 @@ int ECCommon::ReadPipeline::get_min_avail_to_read_shards(
 
   sinfo.ro_size_to_read_mask(read_request.object_size, read_mask);
   sinfo.ro_size_to_zero_mask(read_request.object_size, zero_mask);
-
-  read_superset = read_request.shard_want_to_read.get_extent_superset();
 
   /* First deal with missing shards */
   for (auto &&[shard, extent_set] : read_request.shard_want_to_read) {
@@ -742,16 +739,19 @@ void ECCommon::RMWPipeline::start_rmw(OpRef op)
 
   op->pending_cache_ops = op->plan.plans.size();
   for (auto &&[oid, plan] : op->plan.plans) {
-    ECExtentCache::OpRef cache_op = extent_cache.request(oid,
+    ECExtentCache::OpRef cache_op = extent_cache.prepare(oid,
       plan.to_read,
       plan.will_write,
       plan.orig_size,
       plan.projected_size,
       [op](ECExtentCache::OpRef &cache_op)
       {
-        op->cache_ops.emplace(op->hoid, cache_op);
         op->cache_ready(op->hoid, cache_op->get_result());
       });
+    op->cache_ops.emplace(op->hoid, cache_op);
+  }
+  for (auto &&[_, cache_op] : op->cache_ops) {
+    extent_cache.execute(cache_op);
   }
 }
 
