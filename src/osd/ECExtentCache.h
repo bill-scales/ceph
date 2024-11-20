@@ -35,8 +35,10 @@ namespace ECExtentCache {
     std::list<OpRef> waiting_ops;
     void cache_maybe_ready();
     bool lru_enabled;
+    int counter = 0;
+    int active_ios = 0;
 
-    OpRef request(GenContextURef<OpRef &> &&ctx,
+    OpRef prepare(GenContextURef<OpRef &> &&ctx,
       hobject_t const &oid,
       std::optional<ECUtil::shard_extent_set_t> const &to_read,
       ECUtil::shard_extent_set_t const &write,
@@ -64,7 +66,7 @@ namespace ECExtentCache {
     uint64_t get_projected_size(hobject_t const &oid);
 
     template<typename CacheReadyCb>
-    OpRef request(hobject_t const &oid,
+    OpRef prepare(hobject_t const &oid,
       std::optional<ECUtil::shard_extent_set_t> const &to_read,
       ECUtil::shard_extent_set_t const &write,
       uint64_t orig_size,
@@ -74,9 +76,12 @@ namespace ECExtentCache {
       GenContextURef<OpRef &> ctx = make_gen_lambda_context<OpRef &, CacheReadyCb>(
             std::forward<CacheReadyCb>(ready_cb));
 
-      return request(std::move(ctx), oid, to_read, write, orig_size, projected_size);
+      return prepare(std::move(ctx), oid, to_read, write, orig_size, projected_size);
     }
+
+    void execute(OpRef op);
     bool idle() const;
+    int get_and_reset_counter();
   };
 
   class LRU {

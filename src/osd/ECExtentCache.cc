@@ -85,7 +85,6 @@ namespace ECExtentCache {
 
   uint64_t Object::insert(shard_extent_map_t const &buffers)
   {
-    check_buffers_pinned(buffers);
     check_cache_pinned();
 
     uint64_t old_size = cache.size();
@@ -165,7 +164,7 @@ namespace ECExtentCache {
     ceph_assert(!lru_enabled || ceph_mutex_is_locked_by_me(lru.mutex));
   }
 
-  OpRef PG::request(GenContextURef<OpRef &> && ctx,
+  OpRef PG::prepare(GenContextURef<OpRef &> && ctx,
     hobject_t const &oid,
     std::optional<shard_extent_set_t> const &to_read,
     shard_extent_set_t const &write,
@@ -184,13 +183,8 @@ namespace ECExtentCache {
     op->object.projected_size = op->projected_size = projected_size;
     if (op->object.active_ios == 0)
       op->object.current_size = orig_size;
-    op->object.request(op);
 
-    waiting_ops.emplace_back(op);
-
-    cache_maybe_ready();
     unlock();
-
     return op;
   }
 
@@ -226,6 +220,8 @@ namespace ECExtentCache {
   void PG::complete(OpRef &op) {
     lock();
     op->object.unpin(op);
+    ceph_assert(active_ios > 0);
+    active_ios--;
     if (lru_enabled) {
       lru.free_maybe();
     }
@@ -242,11 +238,29 @@ namespace ECExtentCache {
 
     waiting_ops.clear();
     objects.clear();
+    active_ios = 0;
   }
+
+  void PG::execute(OpRef op) {
+    lock();
+    op->object.request(op);
+    active_ios++;
+    waiting_ops.emplace_back(op);
+    counter++;
+    cache_maybe_ready();
+    unlock();
+  };
 
   bool PG::idle() const
   {
-    return waiting_ops.empty();
+    return active_ios == 0;
+  }
+
+  int PG::get_and_reset_counter()
+  {
+    int ret = counter;
+    counter = 0;
+    return ret;
   }
 
   void LRU::inc_size(uint64_t _size) {

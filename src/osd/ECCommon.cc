@@ -912,9 +912,15 @@ void ECCommon::RMWPipeline::try_finish_rmw()
     if (op.version > committed_to)
       committed_to = op.version;
 
+    for (auto &&[_, c]: op.cache_ops) {
+      extent_cache.complete(c);
+    }
+    op.cache_ops.clear();
+
     if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {
-      // FIXME: This needs to be implemented as a flushing write.
       if (op.version > get_parent()->get_log().get_can_rollback_to()) {
+        int transactions_since_last_idle = extent_cache.get_and_reset_counter();
+        dout(20) << __func__ << " version=" << op.version << " ec_counter=" << transactions_since_last_idle << dendl;
         // submit a dummy, transaction-empty op to kick the rollforward
         auto tid = get_parent()->get_tid();
         auto nop = std::make_shared<ECDummyOp>();
@@ -926,7 +932,7 @@ void ECCommon::RMWPipeline::try_finish_rmw()
         nop->pending_cache_ops = 1;
         nop->pipeline = this;
 
-        ECExtentCache::OpRef cache_op = extent_cache.request(op.hoid,
+        ECExtentCache::OpRef cache_op = extent_cache.prepare(op.hoid,
           std::nullopt,
           ECUtil::shard_extent_set_t(),
           op.plan.plans.at(op.hoid).orig_size,
@@ -940,12 +946,6 @@ void ECCommon::RMWPipeline::try_finish_rmw()
         tid_to_op_map[tid] = std::move(nop);
       }
     }
-
-    for (auto &&[_, c]: op.cache_ops) {
-      extent_cache.complete(c);
-    }
-
-    op.cache_ops.clear();
 
     tid_to_op_map.erase(op.tid);
   }
