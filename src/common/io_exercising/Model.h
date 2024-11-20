@@ -285,6 +285,7 @@ public:
   ~RadosIo();
 
   void allow_ec_overwrites(bool allow);
+  void allow_ec_optimizations(bool allow);
 
   class AsyncOp {
   public:
