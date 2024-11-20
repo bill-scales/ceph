@@ -34,10 +34,10 @@ using ceph::decode;
 using ceph::encode;
 using ceph::ErasureCodeInterfaceRef;
 
-void debug(hobject_t oid, const std::string &str, ECUtil::shard_extent_map_t &map, DoutPrefixProvider *dpp)
+void debug(const hobject_t &oid, const std::string &str, const ECUtil::shard_extent_map_t &map, DoutPrefixProvider *dpp)
 {
 #if DEBUG_EC_BUFFERS
-  ldpp_dout(dpp, 0)
+  ldpp_dout(dpp, 20)
     << "EC_DEBUG_BUFFERS: generate_transactions: "
     << "oid: " << oid
     << " " << str << " " << map.debug_string(2048, 8) << dendl;
