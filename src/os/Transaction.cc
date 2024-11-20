@@ -55,14 +55,6 @@ void decode_str_set_to_bl(bufferlist::const_iterator& p,
 
 namespace ceph::os {
 
-void Transaction::debug_oi(const ghobject_t&oid, const ceph::buffer::list &bl)
-{
-  object_info_t oi(bl);
-  if (oid.hobj.oid.name == "test") {
-    dout(0) << " BILLDOI: " << oi.version << " " << oi.prior_version << " " << oi.shard_versions << dendl;
-  }
-}
-
 void Transaction::dump(ceph::Formatter *f)
 {
   f->open_array_section("ops");

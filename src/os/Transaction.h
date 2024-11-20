@@ -248,8 +248,6 @@ private:
 public:
   Transaction() = default;
 
-  void debug_oi(const ghobject_t&oid, const ceph::buffer::list &bl);
-
   explicit Transaction(ceph::buffer::list::const_iterator &dp) {
     decode(dp);
   }
@@ -917,9 +915,6 @@ public:
     _op->oid = _get_object_id(oid);
     encode(s, data_bl);
     encode(val, data_bl);
-    if (s==OI_ATTR) {
-      debug_oi(oid,val);
-    }
     data.ops = data.ops + 1;
   }
   /// Set multiple xattrs of an object
@@ -931,12 +926,6 @@ public:
     _op->op = OP_SETATTRS;
     _op->cid = _get_coll_id(cid);
     _op->oid = _get_object_id(oid);
-    if (attrset.count(OI_ATTR)!=0) {
-      bufferlist bl;
-      auto b = attrset.at(OI_ATTR);
-      bl.append(b);
-      debug_oi(oid,bl);
-    }
     encode(attrset, data_bl);
     data.ops = data.ops + 1;
   }
@@ -949,10 +938,6 @@ public:
     _op->op = OP_SETATTRS;
     _op->cid = _get_coll_id(cid);
     _op->oid = _get_object_id(oid);
-    if (attrset.count(OI_ATTR)!=0) {
-      auto bl = attrset.at(OI_ATTR);
-      debug_oi(oid,bl);
-    }
     encode(attrset, data_bl);
     data.ops = data.ops + 1;
   }
