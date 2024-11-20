@@ -278,8 +278,6 @@ void ECTransaction::generate_transactions(
     obj_to_log.insert(make_pair(i.soid, &i));
   }
 
-  map<hobject_t, extent_set> write_plan_validation;
-
   t.safe_create_traverse(
     [&](pair<const hobject_t, PGTransaction::ObjectOperation> &opair)
     {
@@ -300,8 +298,6 @@ void ECTransaction::generate_transactions(
       } else {
         ceph_assert(oid.is_temp());
       }
-
-      write_plan_validation[oid];
 
       WritePlanObj &plan = plans.plans.at(oid);
 
