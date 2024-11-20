@@ -633,9 +633,42 @@ class interval_set {
     }
   }
 
+  /** This general erase method erases after a particular offset.
+ */
+  void erase_after(T start) {
+    T begin = start;
+
+    auto p = find_inc_m(begin);
+
+    while ( p != m.end()) {
+      T pend = p->first + p->second;
+
+      // Skip any gap.
+      if (begin < p->first) begin = p->first;
+      _size -= pend - begin;
+
+      // Truncate (delete later if empty)
+      p->second = begin - p->first;
+
+      // Erase empty interval or move on.
+      if (!p->second) p = m.erase(p);
+      else ++p;
+
+      begin = pend;
+    }
+  }
+
   void subtract(const interval_set &a) {
-    for (const auto& [start, len] : a.m) {
-      erase(start, len);
+    if (empty() || a.empty()) return;
+
+    auto start = range_start();
+    auto end = range_end();
+
+    /* Only loop over the overlapping range of a */
+    for (auto ap = a.find_inc(start);
+         ap != a.m.end() && ap->first <= end;
+        ++ap) {
+      erase(ap->first, ap->second);
     }
   }
 
