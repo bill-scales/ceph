@@ -36,6 +36,7 @@ namespace ECExtentCache {
     void cache_maybe_ready();
     bool lru_enabled;
     int counter = 0;
+    uint64_t cumm_size = 0;
     int active_ios = 0;
 
     OpRef prepare(GenContextURef<OpRef &> &&ctx,
@@ -82,6 +83,7 @@ namespace ECExtentCache {
     void execute(OpRef op);
     bool idle() const;
     int get_and_reset_counter();
+    uint64_t get_and_reset_cumm_size();
   };
 
   class LRU {

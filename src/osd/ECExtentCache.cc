@@ -228,6 +228,7 @@ namespace ECExtentCache {
     active_ios++;
     waiting_ops.emplace_back(op);
     counter++;
+    cumm_size += op->writes.size();
     cache_maybe_ready();
     unlock();
   };
@@ -241,6 +242,13 @@ namespace ECExtentCache {
   {
     int ret = counter;
     counter = 0;
+    return ret;
+  }
+
+  uint64_t PG::get_and_reset_cumm_size()
+  {
+    int ret = cumm_size;
+    cumm_size = 0;
     return ret;
   }
 
