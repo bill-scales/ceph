@@ -875,6 +875,14 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
     }
   }
 
+  for (auto &&[oid, cop]: op.cache_ops) {
+    if (written.contains(oid)) {
+      extent_cache.write_done(cop, std::move(written.at(oid)));
+    } else {
+      extent_cache.write_done(cop, ECUtil::shard_extent_map_t(&sinfo));
+    }
+  }
+
   if (!messages.empty()) {
     get_parent()->send_message_osd_cluster(messages, get_osdmap_epoch());
   }
@@ -891,14 +899,6 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
        i != op.on_write.end();
        op.on_write.erase(i++)) {
     (*i)();
-  }
-
-  for (auto &&[oid, cop]: op.cache_ops) {
-    if (written.contains(oid)) {
-      extent_cache.write_done(cop, std::move(written.at(oid)));
-    } else {
-      extent_cache.write_done(cop, ECUtil::shard_extent_map_t(&sinfo));
-    }
   }
 }
 
@@ -939,7 +939,8 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
   if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {
     if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       int transactions_since_last_idle = extent_cache.get_and_reset_counter();
-      dout(20) << __func__ << " version=" << op->version << " ec_counter=" << transactions_since_last_idle << dendl;
+      uint64_t cumm_size = extent_cache.get_and_reset_cumm_size();
+      dout(20) << __func__ << " version=" << op->version << " ec_counter=" << transactions_since_last_idle << " size=" << cumm_size << dendl; dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
       auto tid = get_parent()->get_tid();
       auto nop = std::make_shared<ECDummyOp>();
@@ -964,9 +965,9 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
 
       tid_to_op_map[tid] = std::move(nop);
     }
-
-    tid_to_op_map.erase(op->tid);
   }
+
+  tid_to_op_map.erase(op->tid);
 }
 
 void ECCommon::RMWPipeline::on_change()
