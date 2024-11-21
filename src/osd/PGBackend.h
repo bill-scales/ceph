@@ -488,12 +488,13 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
    void rollback_setattrs(
      const hobject_t &hoid,
      std::map<std::string, std::optional<ceph::buffer::list> > &old_attrs,
-     ObjectStore::Transaction *t);
+     ObjectStore::Transaction *t,
+     bool only_oi);
 
    /// Truncate object to rollback append
-   virtual void rollback_append(
+   void rollback_append(
      const hobject_t &hoid,
-     uint64_t old_size,
+     uint64_t old_shard_size,
      ObjectStore::Transaction *t);
 
    /// Unstash object to rollback stash

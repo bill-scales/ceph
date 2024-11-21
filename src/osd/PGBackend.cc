@@ -210,7 +210,10 @@ void PGBackend::rollback(
       const pg_log_entry_t &entry) : hoid(hoid), pg(pg), entry(entry) {}
     void append(uint64_t old_size) override {
       ObjectStore::Transaction temp;
-      pg->rollback_append(hoid, old_size, &temp);
+      auto dpp = pg->get_parent()->get_dpp();
+      const uint64_t shard_size = pg->object_size_to_shard_size(old_size, pg->get_parent()->whoami_shard().shard);
+      ldpp_dout(dpp, 0) << "BILLR: rollback append object_size " << old_size << " shard_size " << shard_size << dendl;
+      pg->rollback_append(hoid, shard_size, &temp);
       temp.append(t);
       temp.swap(t);
     }
@@ -218,11 +221,22 @@ void PGBackend::rollback(
       auto dpp = pg->get_parent()->get_dpp();
       const pg_pool_t &pool = pg->get_parent()->get_pool();
       if (pool.is_nonprimary_shard(pg->get_parent()->whoami_shard().shard)) {
-	ldpp_dout(dpp, 0) << "BILLR: nonprimary_shard skipping attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+        if (entry.is_written_shard(pg->get_parent()->whoami_shard().shard)) {
+	  // Written shard - only rollback OI attr
+	  ldpp_dout(dpp, 0) << "BILLR: written shard OI attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+	  ObjectStore::Transaction temp;
+	  pg->rollback_setattrs(hoid, attrs, &temp, true);
+	  temp.append(t);
+	  temp.swap(t);
+	} else {
+	  // Unwritten shard - nothing to rollback
+	  ldpp_dout(dpp, 0) << "BILLR: unwritten shard skipping attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+	}
       } else {
-	ldpp_dout(dpp, 0) << "BILLR: primary_shatd attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
+	// Primary shard - rollback all attrs
+	ldpp_dout(dpp, 0) << "BILLR: primary_shard attr rollback " << pg->get_parent()->whoami_shard().shard << dendl;
 	ObjectStore::Transaction temp;
-	pg->rollback_setattrs(hoid, attrs, &temp);
+	pg->rollback_setattrs(hoid, attrs, &temp, false);
 	temp.append(t);
 	temp.swap(t);
       }
@@ -260,14 +274,19 @@ void PGBackend::rollback(
       ceph_assert(entry.written_shards.empty() || pool.allows_ecoptimizations());
       auto dpp = pg->get_parent()->get_dpp();
       if (entry.is_written_shard(pg->get_parent()->whoami_shard().shard)) {
-	ldpp_dout(dpp, 0) << "BILLR: written_shard rollback_extents " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+	// Written shard - rollback extents
 	const uint64_t shard_size = pg->object_size_to_shard_size(object_size, pg->get_parent()->whoami_shard().shard);
-	ldpp_dout(dpp, 20) << "BILLR: object_size " << object_size << " shard_size " << shard_size << dendl;
+	ldpp_dout(dpp, 0) << "BILLR: written shard rollback_extents " <<
+	                     entry.written_shards << " " <<
+	                     pg->get_parent()->whoami_shard().shard << " " <<
+	                     object_size << " " <<
+	                     shard_size << dendl;
 	pg->rollback_extents(gen, extents, hoid, shard_size, &temp);
 	temp.append(t);
 	temp.swap(t);
       } else {
-	ldpp_dout(dpp, 0) << "BILLR: not written_shard skipping rollback_extents " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+	// Unwritten shard - nothing to rollback
+	ldpp_dout(dpp, 0) << "BILLR: unwritten shard skipping rollback_extents " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
       }
     }
   };
@@ -550,7 +569,8 @@ int PGBackend::objects_get_attrs(
 void PGBackend::rollback_setattrs(
   const hobject_t &hoid,
   map<string, std::optional<bufferlist> > &old_attrs,
-  ObjectStore::Transaction *t) {
+  ObjectStore::Transaction *t,
+  bool only_oi) {
   map<string, bufferlist, less<>> to_set;
   ceph_assert(!hoid.is_temp());
   for (map<string, std::optional<bufferlist> >::iterator i = old_attrs.begin();
@@ -558,28 +578,36 @@ void PGBackend::rollback_setattrs(
        ++i) {
     if (i->second) {
       to_set[i->first] = *(i->second);
-    } else {
+    } else if (!only_oi) {
       t->rmattr(
 	coll,
 	ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
 	i->first);
     }
   }
-  t->setattrs(
-    coll,
-    ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-    to_set);
+  if (only_oi) {
+    t->setattr(
+      coll,
+      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+      OI_ATTR,
+      to_set[OI_ATTR]);
+  } else {
+    t->setattrs(
+      coll,
+      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+      to_set);
+  }
 }
 
 void PGBackend::rollback_append(
   const hobject_t &hoid,
-  uint64_t old_size,
+  uint64_t old_shard_size,
   ObjectStore::Transaction *t) {
   ceph_assert(!hoid.is_temp());
   t->truncate(
     coll,
     ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-    old_size);
+    old_shard_size);
 }
 
 void PGBackend::rollback_stash(

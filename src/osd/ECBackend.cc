@@ -1730,19 +1730,6 @@ int ECBackend::objects_get_attrs(
   return r;
 }
 
-void ECBackend::rollback_append(
-  const hobject_t &hoid,
-  uint64_t old_size,
-  ObjectStore::Transaction *t)
-{
-  ceph_assert(old_size % sinfo.get_stripe_width() == 0);
-  t->truncate(
-    coll,
-    ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-    sinfo.aligned_logical_offset_to_chunk_offset(
-      old_size));
-}
-
 int ECBackend::be_deep_scrub(
   const hobject_t &poid,
   ScrubMap &map,

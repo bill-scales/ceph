@@ -48,19 +48,19 @@ static void get_min_want_to_write_shards(
   const auto [left_chunk_index, right_chunk_index] =
     sinfo.offset_length_to_data_chunk_indices(offset, length);
   const auto distance = std::min(right_chunk_index - left_chunk_index, k);
-  // Add modified data chunks
+  // Add modified data shards
   for(uint64_t i = 0; i < distance; i++) {
-    auto raw_chunk = (left_chunk_index + i) % k;
-    auto chunk = size > raw_chunk ? chunk_mapping[raw_chunk] :
-      static_cast<int>(raw_chunk);
-    want_to_write->insert(chunk);
+    auto raw_shard = (left_chunk_index + i) % k;
+    auto shard = size > raw_shard ? chunk_mapping[raw_shard] :
+      static_cast<int>(raw_shard);
+    want_to_write->insert(shard);
   }
-  // Add coding parity chunks
+  // Add coding parity shards (including lower layer coding parities for LRC)
   for(uint64_t i = 0; i < m; i++) {
-    auto raw_chunk = k + i;
-    auto chunk = size > raw_chunk ? chunk_mapping[raw_chunk] :
-      static_cast<int>(raw_chunk);
-    want_to_write->insert(chunk);
+    auto raw_shard = k + i;
+    auto shard = size > raw_shard ? chunk_mapping[raw_shard] :
+      static_cast<int>(raw_shard);
+    want_to_write->insert(shard);
   }
 }
 
@@ -703,12 +703,36 @@ void ECTransaction::generate_transactions(
 	if (entry->written_shards.empty()) {
 	  if (!oi.shard_versions.empty()) {
 	    oi.shard_versions.clear();
-	    ldpp_dout(dpp, 0) << "BILLOI: Full shard write, clearing shard versions -  version " << oi.version << dendl;
+	    ldpp_dout(dpp, 20) << "BILLOI: Full shard write, clearing shard versions -  version " << oi.version << dendl;
 	    update = true;
 	  } else {
-	    ldpp_dout(dpp, 0) << "BILLOI: Full shard write, no prev shard versions -  version " << oi.version << dendl;
+	    ldpp_dout(dpp, 20) << "BILLOI: Full shard write, no prev shard versions -  version " << oi.version << dendl;
 	  }
 	} else {
+          for (unsigned int shard = 0; shard < ecimpl->get_chunk_count(); shard++) {
+	    if (sinfo.is_nonprimary_shard(shard_id_t(shard))) {
+              if (entry->is_written_shard(shard_id_t(shard))) {
+		// Written - erase per shard version
+		if (oi.shard_versions.erase(shard_id_t(shard))) {
+		  update = true;
+		}
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " erased to " << oi.version << dendl;
+	      } else if (!oi.shard_versions.count(shard_id_t(shard))) {
+		// Unwritten shard, previously up to date
+		oi.shard_versions[shard_id_t(shard)] = oi.prior_version;
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " set to " << oi.prior_version << dendl;
+		update = true;
+	      } else {
+		// Unwritten shard, already out of date
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " left at " << oi.shard_versions[shard_id_t(shard)] << dendl;
+              }
+	    } else {
+	      // Primary shards are always written and use oi.version
+	      ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " blank at " << oi.version << dendl;
+	    }
+          }
+#if 0
+	  // BILL: FIXME: Delete this - didn't cope with LRC mappings
 	  int unwritten_shard = 1;
 	  for (auto written_shard : entry->written_shards) {
 	    while (unwritten_shard < written_shard) {
@@ -734,6 +758,7 @@ void ECTransaction::generate_transactions(
 	      unwritten_shard++;
 	    }
 	  }
+#endif
 	}
 	if (update) {
 	  bufferlist bl;
@@ -783,19 +808,19 @@ void ECTransaction::generate_transactions(
 	}
 	for (auto &&st : *transactions) {
 	  if (!sinfo.is_nonprimary_shard(st.first)) {
-	    // Update all attributes
+	    // Primary shard - Update all attributes
 	    st.second.setattrs(
 	      coll_t(spg_t(pgid, st.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
 	      to_set);
 	  } else if (entry->is_written_shard(st.first)) {
-	    // Only update object_info attribute
+	    // Written shard - Only update object_info attribute
 	    st.second.setattr(
 	      coll_t(spg_t(pgid, st.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
 	      OI_ATTR,
 	      to_set[OI_ATTR]);
-          }
+          } // Else: Unwritten shard - Don't update any attributes
 	}
 	ceph_assert(!xattr_rollback.empty());
       }

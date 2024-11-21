@@ -2694,25 +2694,23 @@ void OSDMap::_pg_to_raw_osds(
 
 int OSDMap::_pick_primary(const pg_pool_t& pool, const vector<int>& osds) const
 {
-  if (pool.has_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS)) {
-    ceph_assert(!pool.nonprimary_shards.empty());
-    int shard = 0;
-    for (auto osd : osds) {
-      if (pool.is_nonprimary_shard(shard_id_t(shard++))) {
-	// Shard cannot be a primary
-	continue;
-      }
-      if (osd != CRUSH_ITEM_NONE) {
-	return osd;
-      }
+  int shard = 0;
+  for (auto osd : osds) {
+    if (pool.is_nonprimary_shard(shard_id_t(shard++))) {
+      // Shard cannot be a primary
+      continue;
     }
-  } else {
-    for (auto osd : osds) {
-      if (osd != CRUSH_ITEM_NONE) {
-	return osd;
-      }
+    if (osd != CRUSH_ITEM_NONE) {
+      return osd;
     }
   }
+  // PG is incomplete - pick any available OSD
+  for (auto osd : osds) {
+    if (osd != CRUSH_ITEM_NONE) {
+      return osd;
+    }
+  }
+  // PG is empty
   return -1;
 }
 
@@ -2895,7 +2893,14 @@ void OSDMap::_get_temp_osds(const pg_pool_t& pool, pg_t pg,
       }
       if ((*temp_pg)[i] != CRUSH_ITEM_NONE) {
 	*temp_primary = (*temp_pg)[i];
-	break;
+	return;
+      }
+    }
+    // PG is incomplete - choose any shard
+    for (unsigned i = 0; i < temp_pg->size(); ++i) {
+      if ((*temp_pg)[i] != CRUSH_ITEM_NONE) {
+	*temp_primary = (*temp_pg)[i];
+	return;
       }
     }
   }
@@ -2986,7 +2991,12 @@ void OSDMap::_pg_to_up_acting_osds(
     if (up_primary)
       *up_primary = _up_primary;
   }
-
+  if (std::find(_acting.begin(), _acting.end(), _acting_primary) == _acting.end()) {
+    // https://tracker.ceph.com/issues/59491
+    // primary-temp has selected an OSD outside of the acting
+    // set - ignore it and make a sensible choice
+    _acting_primary = _pick_primary(*pool, _acting);
+  }
   if (acting)
     acting->swap(_acting);
   if (acting_primary)

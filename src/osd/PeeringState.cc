@@ -1545,11 +1545,6 @@ map<pg_shard_t, pg_info_t>::const_iterator PeeringState::find_best_info(
     // Disqualify anyone who is incomplete (not fully backfilled)
     if (p->second.is_incomplete())
       continue;
-    // Erasure code may restrict the choice of acting primary
-    if (pool.info.is_nonprimary_shard(p->first.shard)) {
-      psdout(0) << "BILLFINDBESTINFO: Skipping non-primary shard " << p->first << dendl;
-      continue;
-    }
     if (best == infos.end()) {
       best = p;
       continue;
@@ -7402,7 +7397,7 @@ PeeringState::GetMissing::GetMissing(my_context ctx)
 	// Matched peer's head entry - see if we can advance last_update because of partial written shards
 	++p;
 	while (p != ps->pg_log.get_log().log.end()) {
-	  psdout(0) << "BILL_GET_MISSING: log entry " << p->version << " has written_shards " << p->written_shards << dendl;
+	  psdout(0) << "BILL_GET_MISSING: log entry " << p->version << " has written_shards=" << p->written_shards << dendl;
 	  if (!p->is_written_shard(i->shard)) {
 	    psdout(0) << "BILL_GET_MISSING: log entry advancing last_update because of partial write" << dendl;
 	    ps->peer_info[*i].last_update = p->version;
@@ -7411,6 +7406,9 @@ PeeringState::GetMissing::GetMissing(my_context ctx)
 	    // and will explain to PeeringState::Stray::react(const MInfoRec& infoevt) why last_update and complete
 	    // have been advanced
             ps->info.partial_writes_last_complete[i->shard] = p->version;
+	  } else {
+	    psdout(0) << "BILL_GET_MISSING: log entry is divergent - rewinding one entry" << dendl;
+	    break;
 	  }
 	  ++p;
 	}
