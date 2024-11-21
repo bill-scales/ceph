@@ -410,46 +410,55 @@ namespace ECUtil {
     extent_set encode_set = get_extent_superset();
     encode_set.align(CEPH_PAGE_SIZE);
 
-    for (auto &&[offset, length] : encode_set) {
-      std::set<int> shards;
-      std::map<int, buffer::list> chunk_buffers;
+    uint64_t chunk_size = 1024*1024; //sinfo->get_chunk_size();
 
-      for (int raw_shard = 0; raw_shard< sinfo->get_k_plus_m(); raw_shard++) {
-        int shard = sinfo->get_shard(raw_shard);
-        zero_pad(shard, offset, length);
-        get_buffer(shard, offset, length, chunk_buffers[shard]);
+    for (auto &&[_offset, _length] : encode_set) {
+      for (uint64_t offset = _offset;
+        offset < _offset + _length;
+        offset += chunk_size) {
 
-        ceph_assert(chunk_buffers[shard].length() == length);
-        chunk_buffers[shard].rebuild_aligned_size_and_memory(sinfo->get_chunk_size(), SIMD_ALIGN);
+        uint64_t length = std::min(chunk_size, _offset + _length - offset);
 
-        // The above can replace the buffer, which will not make it back into
-        // the extent map, so re-insert this buffer back into the original
-        // extent map. We can probably optimise this out much of the time.
-        extent_maps[shard].insert(offset, length, chunk_buffers[shard]);
+        std::set<int> shards;
+        std::map<int, buffer::list> chunk_buffers;
 
-        if (raw_shard >= sinfo->get_k()) {
-          shards.insert(raw_shard); // FIXME: Why raw shards??? Needs fix or comment.
+        for (int raw_shard = 0; raw_shard< sinfo->get_k_plus_m(); raw_shard++) {
+          int shard = sinfo->get_shard(raw_shard);
+          zero_pad(shard, offset, length);
+          get_buffer(shard, offset, length, chunk_buffers[shard]);
+
+          ceph_assert(chunk_buffers[shard].length() == length);
+          chunk_buffers[shard].rebuild_aligned_size_and_memory(sinfo->get_chunk_size(), SIMD_ALIGN);
+
+          // The above can replace the buffer, which will not make it back into
+          // the extent map, so re-insert this buffer back into the original
+          // extent map. We can probably optimise this out much of the time.
+          extent_maps[shard].insert(offset, length, chunk_buffers[shard]);
+
+          if (raw_shard >= sinfo->get_k()) {
+            shards.insert(raw_shard); // FIXME: Why raw shards??? Needs fix or comment.
+          }
         }
-      }
 
-      /* Eventually this will call a new API to allow for delta writes. For now
-       * however, we call this interface, which will segfault if a full stripe
-       * is not provided.
-       */
-      int r = ecimpl->encode_chunks(shards, &chunk_buffers);
-      if (r) return r;
+        /* Eventually this will call a new API to allow for delta writes. For now
+         * however, we call this interface, which will segfault if a full stripe
+         * is not provided.
+         */
+        int r = ecimpl->encode_chunks(shards, &chunk_buffers);
+        if (r) return r;
 
-      /* NEEDS REVIEW:  The following calculates the new hinfo CRCs. This is
-       *                 currently considering ALL the buffers, including the
-       *                 parity buffers.  Is this really right?
-       *                 Also, does this really belong here? Its convenient
-       *                 because have just built the buffer list...
-       */
-      if (hinfo && ro_start >= before_ro_size) {
-        ceph_assert(ro_start == before_ro_size);
-        hinfo->append(
-          offset,
-          chunk_buffers);
+        /* NEEDS REVIEW:  The following calculates the new hinfo CRCs. This is
+         *                 currently considering ALL the buffers, including the
+         *                 parity buffers.  Is this really right?
+         *                 Also, does this really belong here? Its convenient
+         *                 because have just built the buffer list...
+         */
+        if (hinfo && ro_start >= before_ro_size) {
+          ceph_assert(ro_start == before_ro_size);
+          hinfo->append(
+            offset,
+            chunk_buffers);
+        }
       }
     }
     return 0;
