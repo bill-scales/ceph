@@ -458,7 +458,7 @@ namespace ECUtil {
   int shard_extent_map_t::decode(ErasureCodeInterfaceRef& ecimpl,
     shard_extent_set_t want)
   {
-    bool decoded = false;
+    bool did_decode = false;
     int r = 0;
     for (auto &&[shard, eset]: want) {
       /* We are assuming here that a shard that has been read does not need
@@ -472,7 +472,7 @@ namespace ECUtil {
       if (sinfo->get_raw_shard(shard) >= sinfo->get_k())
         continue;
 
-      decoded = true;
+      did_decode = true;
 
       for (auto [offset, length]: eset) {
         /* Here we recover each missing shard independently. There may be
@@ -509,7 +509,7 @@ namespace ECUtil {
       }
     }
 
-    if (decoded) compute_ro_range();
+    if (did_decode) compute_ro_range();
 
     return r;
   }
