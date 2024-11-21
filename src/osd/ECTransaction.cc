@@ -396,9 +396,8 @@ void ECTransaction::generate_transactions(
 	to_write = pextiter->second;
       }
 
-      vector<pair<uint64_t, uint64_t> > rollback_extents;
+      bool overwrite = false;
       const uint64_t orig_size = hinfo->get_total_logical_size(sinfo);
-
       uint64_t new_size = orig_size;
       uint64_t append_after = new_size;
       ldpp_dout(dpp, 20) << "generate_transactions: new_size start "
@@ -431,7 +430,6 @@ void ECTransaction::generate_transactions(
 	  uint64_t restore_len = sinfo.aligned_logical_offset_to_chunk_offset(
 	    orig_size -
 	    sinfo.logical_to_prev_stripe_offset(op.truncate->first));
-	  ceph_assert(rollback_extents.empty());
 
 	  ldpp_dout(dpp, 20) << "generate_transactions: saving extent "
 			     << make_pair(restore_from, restore_len)
@@ -439,8 +437,14 @@ void ECTransaction::generate_transactions(
 	  ldpp_dout(dpp, 20) << "generate_transactions: truncating to "
 			     << new_size
 			     << dendl;
-	  rollback_extents.emplace_back(
-	    make_pair(restore_from, restore_len));
+	  set<int> want_to_write;
+	  overwrite = true;
+	  entry->mod_desc.rollback_extents(
+            entry->version.version,
+            restore_from,
+	    restore_len,
+	    orig_size,
+	    want_to_write);
 	  for (auto &&st : *transactions) {
 	    st.second.touch(
 	      coll_t(spg_t(pgid, st.first)),
@@ -589,7 +593,13 @@ void ECTransaction::generate_transactions(
 	  ldpp_dout(dpp, 20) << "generate_transactions: overwriting "
 			     << restore_from << "~" << restore_len
 			     << dendl;
-	  rollback_extents.emplace_back(make_pair(restore_from, restore_len));
+	  overwrite = true;
+	  entry->mod_desc.rollback_extents(
+            entry->version.version,
+            restore_from,
+	    restore_len,
+	    orig_size,
+	    want_to_write);
 	  for (auto &&st : *transactions) {
 	    if (want_to_write.contains(st.first)) {
 	      if (!entry->written_shards.contains(st.first)) {
@@ -667,17 +677,7 @@ void ECTransaction::generate_transactions(
 			 << " resetting hinfo to logical size "
 			 << new_size
 			 << dendl;
-      if (!rollback_extents.empty() && entry) {
-	if (entry) {
-	  ldpp_dout(dpp, 20) << "generate_transactions: " << oid
-			     << " marking rollback extents "
-			     << rollback_extents
-			     << dendl;
-	  entry->mod_desc.rollback_extents(
-            entry->version.version,
-            rollback_extents,
-            hinfo->get_total_logical_size(sinfo));
-	}
+      if (overwrite && entry) {
 	if (entry->written_shards.size() == ecimpl->get_chunk_count()) {
 	  // More efficient to encode an empty set to mean all shards
 	  entry->written_shards.clear();

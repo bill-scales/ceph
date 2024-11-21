@@ -4004,9 +4004,10 @@ public:
     virtual void create() {}
     virtual void update_snaps(const std::set<snapid_t> &old_snaps) {}
     virtual void rollback_extents(
-      version_t gen,
-      const std::vector<std::pair<uint64_t, uint64_t> > &extents,
-      uint64_t object_size) {}
+      const version_t gen,
+      const std::vector<std::pair<uint64_t, uint64_t>> &extents,
+      const uint64_t object_size,
+      const std::set<int> shards) {}
     virtual ~Visitor() {}
   };
   void visit(Visitor *visitor) const;
@@ -4104,11 +4105,15 @@ public:
     ENCODE_FINISH(bl);
   }
   void rollback_extents(
-   version_t gen,
-   const std::vector<std::pair<uint64_t, uint64_t> > &extents,
-   uint64_t object_size) {
+   const version_t gen,
+   const uint64_t offset,
+   const uint64_t length,
+   const uint64_t object_size,
+   const std::set<int> &shards) {
     ceph_assert(can_local_rollback);
     ceph_assert(!rollback_info_completed);
+    std::vector<std::pair<uint64_t, uint64_t>> extents;
+    extents.emplace_back(std::make_pair(offset,length));
     if (max_required_version < 2)
       max_required_version = 2;
     ENCODE_START(3, 2, bl);
@@ -4116,6 +4121,7 @@ public:
     encode(gen, bl);
     encode(extents, bl);
     encode(object_size, bl);
+    encode(shards, bl);
     ENCODE_FINISH(bl);
   }
 

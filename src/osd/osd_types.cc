@@ -4602,6 +4602,7 @@ void ObjectModDesc::visit(Visitor *visitor) const
 	vector<pair<uint64_t, uint64_t> > extents;
 	version_t gen;
 	uint64_t object_size;
+	set<int> shards;
 	decode(gen, bp);
 	decode(extents, bp);
 	if (struct_v < 3) {
@@ -4612,8 +4613,9 @@ void ObjectModDesc::visit(Visitor *visitor) const
 	  object_size = 0xffffffffffffffffUL;
 	} else {
 	  decode(object_size, bp);
+	  decode(shards, bp);
 	}
-	visitor->rollback_extents(gen, extents, object_size);
+	visitor->rollback_extents(gen, extents, object_size, shards);
 	break;
       }
       default:
@@ -4669,13 +4671,15 @@ struct DumpVisitor : public ObjectModDesc::Visitor {
     f->close_section();
   }
   void rollback_extents(
-    version_t gen,
+    const version_t gen,
     const vector<pair<uint64_t, uint64_t> > &extents,
-    uint64_t object_size) override {
+    const uint64_t object_size,
+    const set<int> shards) override {
     f->open_object_section("op");
     f->dump_string("code", "ROLLBACK_EXTENTS");
     f->dump_unsigned("gen", gen);
     f->dump_unsigned("object_size", object_size);
+    f->dump_stream("shards") << shards;
     f->dump_stream("snaps") << extents;
     f->close_section();
   }

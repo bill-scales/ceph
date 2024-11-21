@@ -266,14 +266,15 @@ void PGBackend::rollback(
       temp.swap(t);
     }
     void rollback_extents(
-      version_t gen,
+      const version_t gen,
       const vector<pair<uint64_t, uint64_t> > &extents,
-      uint64_t object_size) override {
+      const uint64_t object_size,
+      const set<int> shards) override {
       ObjectStore::Transaction temp;
       const pg_pool_t& pool = pg->get_parent()->get_pool();
       ceph_assert(entry.written_shards.empty() || pool.allows_ecoptimizations());
       auto dpp = pg->get_parent()->get_dpp();
-      if (entry.is_written_shard(pg->get_parent()->whoami_shard().shard)) {
+      if (shards.empty() || shards.contains(pg->get_parent()->whoami_shard().shard)) {
 	// Written shard - rollback extents
 	const uint64_t shard_size = pg->object_size_to_shard_size(object_size, pg->get_parent()->whoami_shard().shard);
 	ldpp_dout(dpp, 0) << "BILLR: written shard rollback_extents " <<
@@ -301,13 +302,11 @@ struct Trimmer : public ObjectModDesc::Visitor {
   const hobject_t &soid;
   PGBackend *pg;
   ObjectStore::Transaction *t;
-  const pg_log_entry_t &entry;
   Trimmer(
     const hobject_t &soid,
     PGBackend *pg,
-    ObjectStore::Transaction *t,
-    const pg_log_entry_t &entry)
-    : soid(soid), pg(pg), t(t), entry(entry) {}
+    ObjectStore::Transaction *t)
+    : soid(soid), pg(pg), t(t) {}
   void rmobject(version_t old_version) override {
     pg->trim_rollback_object(
       soid,
@@ -316,19 +315,20 @@ struct Trimmer : public ObjectModDesc::Visitor {
   }
   // try_rmobject defaults to rmobject
   void rollback_extents(
-    version_t gen,
+    const version_t gen,
     const vector<pair<uint64_t, uint64_t> > &extents,
-    uint64_t object_size) override {
-    if (entry.is_written_shard(pg->get_parent()->whoami_shard().shard)) {
+    const uint64_t object_size,
+    const set<int> shards) override {
+    if (shards.empty() || shards.contains(pg->get_parent()->whoami_shard().shard)) {
       auto dpp = pg->get_parent()->get_dpp();
-      ldpp_dout(dpp, 0) << "BILLR: written_shard trim " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+      ldpp_dout(dpp, 0) << "BILLR: written_shard trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
       pg->trim_rollback_object(
         soid,
         gen,
         t);
     } else {
       auto dpp = pg->get_parent()->get_dpp();
-      ldpp_dout(dpp, 0) << "BILLR: not written_shard skipping trim " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+      ldpp_dout(dpp, 0) << "BILLR: not written_shard skipping trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
     }
   }
 };
@@ -341,7 +341,7 @@ void PGBackend::rollforward(
   ldpp_dout(dpp, 20) << __func__ << ": entry=" << entry << dendl;
   if (!entry.can_rollback())
     return;
-  Trimmer trimmer(entry.soid, this, t, entry);
+  Trimmer trimmer(entry.soid, this, t);
   entry.mod_desc.visit(&trimmer);
 }
 
@@ -351,7 +351,7 @@ void PGBackend::trim(
 {
   if (!entry.can_rollback())
     return;
-  Trimmer trimmer(entry.soid, this, t, entry);
+  Trimmer trimmer(entry.soid, this, t);
   entry.mod_desc.visit(&trimmer);
 }
 
