@@ -594,8 +594,7 @@ void ECTransaction::generate_transactions(
          *
          * This could probably be more efficient...
          */
-        auto clone_region = to_write.get_extent_superset();
-        clone_region.align(sinfo.get_chunk_size());
+        auto clone_region = plan.will_write.get_extent_superset();
 
         ECUtil::shard_extent_set_t cloneable_range;
         sinfo.ro_range_to_shard_extent_set_with_parity(0, clone_max, cloneable_range);
