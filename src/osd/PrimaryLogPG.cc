@@ -14417,15 +14417,7 @@ void PrimaryLogPG::scan_range_primary(
 
   for (vector<hobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
     handle.reset_tp_timeout();
-//FIXME: BILL: Delete this - assert shows this only runs on a primary
-#if 0
-    ObjectContextRef obc;
-    eversion_t version;
-    std::map<shard_id_t,eversion_t> shard_versions;
 
-    if (is_primary())
-      obc = object_contexts.lookup(*p);
-#endif
     ceph_assert(is_primary());
 
     eversion_t version;
@@ -14493,40 +14485,7 @@ void PrimaryLogPG::scan_range_replica(
 
   for (vector<hobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
     handle.reset_tp_timeout();
-//FIXME: BILL: Delete this - assert shows this doesn't run on primary
-#if 0
-    ObjectContextRef obc;
-    eversion_t version;
 
-    ceph_assert(!is_primary());
-    if (is_primary())
-      obc = object_contexts.lookup(*p);
-    if (obc) {
-      if (!obc->obs.exists) {
-	/* If the object does not exist here, it must have been removed
-	 * between the collection_list_partial and here.  This can happen
-	 * for the first item in the range, which is usually last_backfill.
-	 */
-	continue;
-      }
-      version = obc->obs.oi.version;
-    } else {
-      bufferlist bl;
-      int r = pgbackend->objects_get_attr(*p, OI_ATTR, &bl);
-      /* If the object does not exist here, it must have been removed
-       * between the collection_list_partial and here.  This can happen
-       * for the first item in the range, which is usually last_backfill.
-       */
-      if (r == -ENOENT)
-	continue;
-
-      ceph_assert(r >= 0);
-      object_info_t oi(bl);
-      version = oi.version;
-    }
-    bi->objects[*p] = version;
-    dout(20) << "  BILLBACKFILL: adding " << *p << " " << version << dendl;
-#endif
     ceph_assert(!is_primary());
     bufferlist bl;
     int r = pgbackend->objects_get_attr(*p, OI_ATTR, &bl);
