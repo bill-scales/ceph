@@ -27,6 +27,7 @@ namespace ECExtentCache {
   class PG
   {
     friend class Object;
+    friend class Op;
 
     std::map<hobject_t, Object> objects;
     BackendRead &backend_read;
@@ -89,6 +90,7 @@ namespace ECExtentCache {
   class LRU {
     friend class PG;
     friend class Object;
+    friend class Op;
 
     std::list<Line> lru;
     uint64_t max_size = 0;
@@ -120,6 +122,7 @@ namespace ECExtentCache {
     bool complete = false;
     uint64_t projected_size;
     GenContextURef<OpRef &> cache_ready_cb;
+    std::list<Line> lines;
 
     extent_set get_pin_eset(uint64_t alignment);
 

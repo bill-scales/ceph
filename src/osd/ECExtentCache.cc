@@ -10,6 +10,7 @@ using namespace std;
 using namespace ECUtil;
 
 namespace ECExtentCache {
+
   void Object::request(OpRef &op)
   {
     uint64_t alignment = sinfo.get_chunk_size();
@@ -24,6 +25,7 @@ namespace ECExtentCache {
         else if (l.in_lru) pg.lru.lru.remove(l);
         l.in_lru = false;
         l.ref_count++;
+        op->lines.emplace_back(l);
       }
     }
 
@@ -77,20 +79,14 @@ namespace ECExtentCache {
   }
 
   void Object::unpin(OpRef &op) {
-    uint64_t alignment = sinfo.get_chunk_size();
-    extent_set eset = op->get_pin_eset(alignment);
-
-    for (auto &&[start, len]: eset ) {
-      for (uint64_t to_pin = start; to_pin < start + len; to_pin += alignment) {
-        Line &l = lines.at(to_pin);
-        ceph_assert(l.ref_count);
-        if (!--l.ref_count) {
-          if (pg.lru_enabled) {
-            l.in_lru = true;
-            pg.lru.lru.emplace_back(l);
-          } else {
-            erase_line(l);
-          }
+    for ( auto &&l : op->lines) {
+      ceph_assert(l.ref_count);
+      if (!--l.ref_count) {
+        if (pg.lru_enabled) {
+          l.in_lru = true;
+          pg.lru.lru.emplace_back(l);
+        } else {
+          erase_line(l);
         }
       }
     }
@@ -247,7 +243,7 @@ namespace ECExtentCache {
 
   uint64_t PG::get_and_reset_cumm_size()
   {
-    int ret = cumm_size;
+    uint64_t ret = cumm_size;
     cumm_size = 0;
     return ret;
   }
