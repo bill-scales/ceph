@@ -9,6 +9,9 @@
 using namespace std;
 using namespace ECUtil;
 
+#define dout_context cct
+#define dout_subsys ceph_subsys_osd
+
 namespace ECExtentCache {
 
   void Object::request(OpRef &op)
@@ -33,9 +36,19 @@ namespace ECExtentCache {
     if (op->reads) {
       for (auto &&[shard, eset]: *(op->reads)) {
         extent_set request = eset;
-        if (cache.contains(shard))   request.subtract(cache.get_extent_set(shard));
-        if (reading.contains(shard)) request.subtract(reading.at(shard));
-        if (writing.contains(shard)) request.subtract(writing.at(shard));
+        dout(20) << "request= " << request << dendl;
+        if (cache.contains(shard)) {
+          request.subtract(cache.get_extent_set(shard));
+          dout(20) << "less_cache=" << request << dendl;
+        }
+        if (reading.contains(shard)) {
+          request.subtract(reading.at(shard));
+          dout(20) << "less_reading=" << request << dendl;
+        }
+        if (writing.contains(shard)) {
+          request.subtract(writing.at(shard));
+          dout(20) << "less_writing=" << request << dendl;
+        }
 
         if (!request.empty()) {
           requesting[shard].insert(request);

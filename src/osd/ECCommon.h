@@ -706,7 +706,7 @@ struct ECCommon {
         sinfo(sinfo),
         parent(parent),
         ec_backend(ec_backend),
-        extent_cache(*this, ec_extent_cache_lru, sinfo)
+        extent_cache(*this, ec_extent_cache_lru, sinfo, cct)
     {
     }
   };

@@ -39,6 +39,7 @@ namespace ECExtentCache {
     int counter = 0;
     uint64_t cumm_size = 0;
     int active_ios = 0;
+    CephContext* cct;
 
     OpRef prepare(GenContextURef<OpRef &> &&ctx,
       hobject_t const &oid,
@@ -53,11 +54,13 @@ namespace ECExtentCache {
 
   public:
     explicit PG(BackendRead &backend_read,
-      LRU &lru, const ECUtil::stripe_info_t &sinfo) :
+      LRU &lru, const ECUtil::stripe_info_t &sinfo,
+      CephContext *cct) :
       backend_read(backend_read),
       lru(lru),
       sinfo(sinfo),
-      lru_enabled(LRU_ENABLED) {}
+      lru_enabled(LRU_ENABLED),
+      cct(cct) {}
 
     // Insert some data into the cache.
     void read_done(hobject_t const& oid, ECUtil::shard_extent_map_t const&& update);
@@ -153,6 +156,7 @@ namespace ECExtentCache {
     int active_ios = 0;
     uint64_t projected_size = 0;
     uint64_t current_size = 0;
+    CephContext *cct;
 
     void request(OpRef &op);
     void send_reads();
@@ -167,7 +171,7 @@ namespace ECExtentCache {
 
   public:
     hobject_t oid;
-    Object(PG &pg, hobject_t oid) : pg(pg), sinfo(pg.sinfo), cache(&pg.sinfo), oid(oid) {}
+    Object(PG &pg, hobject_t oid) : pg(pg), sinfo(pg.sinfo), cache(&pg.sinfo), oid(oid), cct(pg.cct) {}
   };
 
 
