@@ -246,6 +246,12 @@ public:
     return 0;
   }
 
+  int encode_chunks_ptr(const std::set<int> &want_to_encode
+    , std::map<int, bufferptr> &encoded) override
+  {
+    return 0;
+  }
+
   int decode(const set<int> &want_to_read, const map<int, bufferlist> &chunks, std::map<int, bufferlist> *decoded,
 	     int chunk_size) override {
     return 0;

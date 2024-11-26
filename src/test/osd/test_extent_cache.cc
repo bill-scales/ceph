@@ -69,7 +69,7 @@ struct Client : public BackendRead
 
   Client(uint64_t chunk_size, int k, int m, uint64_t cache_size) :
     sinfo(k, chunk_size * k, m, vector<int>(0)),
-    lru(cache_size), pg(*this, lru, sinfo) {};
+    lru(cache_size), pg(*this, lru, sinfo, g_ceph_context) {};
 
   void backend_read(hobject_t _oid, const shard_extent_set_t& request,
     uint64_t object_size) override  {
