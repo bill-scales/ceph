@@ -1455,7 +1455,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
     map<hobject_t, ECUtil::shard_extent_map_t>* written,
     std::map<shard_id_t, ObjectStore::Transaction> *transactions,
     DoutPrefixProvider *dpp,
-    const ceph_release_t require_osd_release) final
+    const OSDMapRef& osdmap) final
   {
     assert(t);
     ECTransaction::generate_transactions(
@@ -1471,7 +1471,22 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       &temp_added,
       &temp_cleared,
       dpp,
-      require_osd_release);
+      osdmap);
+  }
+
+  bool skip_transaction(
+      std::set<shard_id_t>& pending_roll_forward,
+      shard_id_t shard,
+      ceph::os::Transaction& transaction) final
+  {
+// FIXME: BILL: Enable EC partial metadata writes
+#if 0
+    if (transaction.empty()) {
+      return true;
+    }
+#endif
+    pending_roll_forward.insert(shard);
+    return false;
   }
 };
 
@@ -1779,19 +1794,6 @@ int ECBackend::objects_get_attrs(
       ++i;
   }
   return r;
-}
-
-void ECBackend::rollback_append(
-  const hobject_t &hoid,
-  uint64_t old_size,
-  ObjectStore::Transaction *t)
-{
-  ceph_assert(old_size % sinfo.get_stripe_width() == 0);
-  t->truncate(
-    coll,
-    ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-    sinfo.aligned_logical_offset_to_chunk_offset(
-      old_size));
 }
 
 int ECBackend::be_deep_scrub(

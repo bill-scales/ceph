@@ -1155,7 +1155,7 @@ TEST(ECCommon, get_remaining_shards)
       ECCommon::shard_read_t shard_read;
       shard_read.subchunk = ecode->default_sub_chunk;
       shard_read.extents.insert(0,4096);
-      int shard_id = i==missing_shard?parity_shard:i;
+      unsigned int shard_id = i==missing_shard?parity_shard:i;
       ref.shard_reads[pg_shard_t(shard_id, shard_id_t(shard_id))] = shard_read;
     }
 
@@ -1169,7 +1169,7 @@ TEST(ECCommon, get_remaining_shards)
     ECUtil::shard_extent_set_t to_read;
     s.ro_range_to_shard_extent_set(chunk_size/2, chunk_size+page_size, to_read);
     ECCommon::read_request_t read_request(to_read, false, object_size);
-    int missing_shard = 1;
+    unsigned int missing_shard = 1;
 
     // Mock up a read result.
     ECCommon::read_result_t read_result(&s);
@@ -1184,10 +1184,10 @@ TEST(ECCommon, get_remaining_shards)
     // is currently missing.
     ECCommon::read_request_t ref(to_read, false, object_size);
     int parity_shard = 4;
-    for (int i=0; i<ssize; i++) {
+    for (unsigned int i=0; i<ssize; i++) {
       ECCommon::shard_read_t shard_read;
       shard_read.subchunk = ecode->default_sub_chunk;
-      int shard_id = i==missing_shard?parity_shard:i;
+      unsigned int shard_id = i==missing_shard?parity_shard:i;
       ref.shard_reads[pg_shard_t(shard_id, shard_id_t(shard_id))] = shard_read;
     }
     ref.shard_reads[pg_shards[0]].extents.insert(0, chunk_size/2);

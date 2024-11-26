@@ -1837,7 +1837,8 @@ public:
   void set_backend_predicates(
     IsPGReadablePredicate *is_readable,
     IsPGRecoverablePredicate *is_recoverable) {
-    missing_loc.set_backend_predicates(is_readable, is_recoverable);
+    missing_loc.set_backend_predicates(is_readable,
+				       is_recoverable);
   }
 
   /// Send current pg_info to peers

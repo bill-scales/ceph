@@ -778,7 +778,7 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
     &written,
     &trans,
     get_parent()->get_dpp(),
-    get_osdmap()->require_osd_release);
+    get_osdmap());
 
   dout(20) << __func__ << ": written: " << written << ", op: " << op << dendl;
 
@@ -808,9 +808,27 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
     oid_to_version[op.hoid] = op.version;
   }
   for (auto &&pg_shard : get_parent()->get_acting_recovery_backfill_shards()) {
-    op.pending_commit.insert(pg_shard);
     auto iter = trans.find(pg_shard.shard);
     ceph_assert(iter != trans.end());
+    if (iter->second.empty()) {
+      dout(20) << " BILL: Transaction for osd." << pg_shard.osd << " shard " << iter->first << " is empty" << dendl;
+    } else {
+      dout(20) << " BILL: Transaction for osd." << pg_shard.osd << " shard " << iter->first << " contents ";
+      Formatter *f = Formatter::create("json");
+      f->open_object_section("t");
+      iter->second.dump(f);
+      f->close_section();
+      f->flush(*_dout);
+      delete f;
+      *_dout << dendl;
+    }
+    if (op.skip_transaction(pending_roll_forward, iter->first, iter->second)) {
+      // Must be an empty transaction
+      ceph_assert(iter->second.empty());
+      dout(20) << " BILL: Skipping transaction for osd." << iter->first << dendl;
+      continue;
+    }
+    op.pending_commit.insert(pg_shard);
     bool should_send = get_parent()->should_send_op(pg_shard, op.hoid);
     const pg_stat_t &stats =
       (should_send || !backfill_shards.count(pg_shard)) ?
@@ -893,10 +911,17 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
     map<hobject_t, ECUtil::shard_extent_map_t>* written,
     std::map<shard_id_t, ObjectStore::Transaction> *transactions,
     DoutPrefixProvider *dpp,
-    const ceph_release_t require_osd_release) final
+    const OSDMapRef& osdmap) final
   {
     // NOP, as -- in constrast to ECClassicalOp -- there is no
     // transaction involved
+  }
+  bool skip_transaction(
+      std::set<shard_id_t>& pending_roll_forward,
+      shard_id_t shard,
+      ceph::os::Transaction& transaction) final
+  {
+    return !pending_roll_forward.erase(shard);
   }
 };
 

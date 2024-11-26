@@ -67,7 +67,7 @@ namespace ECTransaction {
     std::set<hobject_t> *temp_added,
     std::set<hobject_t> *temp_removed,
     DoutPrefixProvider *dpp,
-    const ceph_release_t require_osd_release = ceph_release_t::unknown);
+    const OSDMapRef& osdmap);
 };
 
 #endif

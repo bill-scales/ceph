@@ -258,7 +258,7 @@ void ECTransaction::generate_transactions(
   set<hobject_t> *temp_added,
   set<hobject_t> *temp_removed,
   DoutPrefixProvider *dpp,
-  const ceph_release_t require_osd_release)
+  const OSDMapRef& osdmap)
 {
   ceph_assert(written_map);
   ceph_assert(transactions);
@@ -410,7 +410,7 @@ void ECTransaction::generate_transactions(
 	[&](const PGTransaction::ObjectOperation::Init::None &) {},
 	[&](const PGTransaction::ObjectOperation::Init::Create &_) {
 	  for (auto &&st: *transactions) {
-	    if (require_osd_release >= ceph_release_t::octopus) {
+	    if (osdmap->require_osd_release >= ceph_release_t::octopus) {
 	      st.second.create(
 		coll_t(spg_t(pgid, st.first)),
 		ghobject_t(oid, ghobject_t::NO_GEN, st.first));
@@ -461,57 +461,6 @@ void ECTransaction::generate_transactions(
       ceph_assert(!(op.omap_header));
       ceph_assert(op.omap_updates.empty());
 
-      if (!op.attr_updates.empty()) {
-	map<string, bufferlist, less<>> to_set;
-	for (auto &&[attr, update]: op.attr_updates) {
-	  if (update) {
-	    to_set[attr] = *(update);
-	  } else {
-	    for (auto &&st : *transactions) {
-	      st.second.rmattr(
-		coll_t(spg_t(pgid, st.first)),
-		ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-		attr);
-	    }
-	  }
-	  if (obc) {
-	    auto citer = obc->attr_cache.find(attr);
-	    if (entry) {
-	      if (citer != obc->attr_cache.end()) {
-		// won't overwrite anything we put in earlier
-		xattr_rollback.insert(
-		  make_pair(
-		    attr,
-		    std::optional<bufferlist>(citer->second)));
-	      } else {
-		// won't overwrite anything we put in earlier
-		xattr_rollback.insert(
-		  make_pair(
-		    attr,
-		    std::nullopt));
-	      }
-	    }
-	    if (update) {
-	      obc->attr_cache[attr] = *(update);
-	    } else if (citer != obc->attr_cache.end()) {
-	      obc->attr_cache.erase(citer);
-	    }
-	  } else {
-	    ceph_assert(!entry);
-	  }
-	}
-	for (auto &&st : *transactions) {
-	  st.second.setattrs(
-	    coll_t(spg_t(pgid, st.first)),
-	    ghobject_t(oid, ghobject_t::NO_GEN, st.first),
-	    to_set);
-	}
-	ceph_assert(!xattr_rollback.empty());
-      }
-      if (entry && !xattr_rollback.empty()) {
-	entry->mod_desc.setattrs(xattr_rollback);
-      }
-
       if (op.alloc_hint) {
 	/* logical_to_next_chunk_offset() scales down both aligned and
 	   * unaligned offsets
@@ -541,7 +490,7 @@ void ECTransaction::generate_transactions(
       }
       debug(oid, "to_write", to_write, dpp);
 
-      vector<pair<uint64_t, uint64_t>> rollback_extents;
+      bool overwrite = false;
 
       if (op.truncate && op.truncate->first < plan.orig_size) {
 	ceph_assert(!op.is_fresh_object());
@@ -555,10 +504,14 @@ void ECTransaction::generate_transactions(
 	  uint64_t restore_len = sinfo.aligned_logical_offset_to_chunk_offset(
 	    plan.orig_size -
 	    sinfo.logical_to_prev_stripe_offset(op.truncate->first));
-	  ceph_assert(rollback_extents.empty());
-
-	  rollback_extents.emplace_back(
-	    make_pair(restore_from, restore_len));
+	  set<int> want_to_write;
+	  overwrite = true;
+	  entry->mod_desc.rollback_extents(
+	    entry->version.version,
+	    restore_from,
+	    restore_len,
+	    ECUtil::align_page_next(plan.orig_size),
+	    want_to_write);
 	  for (auto &&[shard, t]: *transactions) {
 	    t.touch(
 	      coll_t(spg_t(pgid, shard)),
@@ -619,7 +572,14 @@ void ECTransaction::generate_transactions(
       uint64_t rollback_max = sinfo.logical_to_next_stripe_offset(clone_max);
       clone_ranges.erase_after(rollback_max);
       for (auto &[start, len] : clone_ranges) {
-        rollback_extents.emplace_back(start, len);
+	set<int> BILL_FIXME;
+	overwrite = true;
+	entry->mod_desc.rollback_extents(
+	  entry->version.version,
+	  start,
+	  len,
+	  ECUtil::align_page_next(plan.orig_size),
+	  BILL_FIXME);
       }
 
       if (!to_write.empty()) {
@@ -669,11 +629,7 @@ void ECTransaction::generate_transactions(
 
       written_map->emplace(oid, std::move(to_write));
 
-      if (!rollback_extents.empty() && entry) {
-	if (entry) {
-	  entry->mod_desc.rollback_extents(entry->version.version, rollback_extents,
-            ECUtil::align_page_next(plan.orig_size));
-	}
+      if (overwrite && entry) {
         if (entry->written_shards.size() == ecimpl->get_chunk_count()) {
           // More efficient to encode an empty set to mean all shards
           entry->written_shards.clear();
@@ -690,18 +646,125 @@ void ECTransaction::generate_transactions(
 	entry->mod_desc.append(plan.orig_size);
       }
 
-      if (!op.is_delete()) {
-        bufferlist hbuf;
-        if (plan.hinfo) {
-          encode(*plan.hinfo, hbuf);
-          for (auto &&i : *transactions) {
-            i.second.setattr(
-              coll_t(spg_t(pgid, i.first)),
-              ghobject_t(oid, ghobject_t::NO_GEN, i.first),
-              ECUtil::get_hinfo_key(),
-              hbuf);
+      // Update shard_versions in object_info to record which shards are being
+      // written
+      if (entry) {
+	object_info_t& oi = obc->obs.oi;
+	bool update = false;
+	if (entry->written_shards.empty()) {
+	  if (!oi.shard_versions.empty()) {
+	    oi.shard_versions.clear();
+	    ldpp_dout(dpp, 20) << "BILLOI: Full shard write, clearing shard versions -  version " << oi.version << dendl;
+	    update = true;
+	  } else {
+	    ldpp_dout(dpp, 20) << "BILLOI: Full shard write, no prev shard versions -  version " << oi.version << dendl;
+	  }
+	} else {
+          for (unsigned int shard = 0; shard < ecimpl->get_chunk_count(); shard++) {
+	    if (sinfo.is_nonprimary_shard(shard_id_t(shard))) {
+              if (entry->is_written_shard(shard_id_t(shard))) {
+		// Written - erase per shard version
+		if (oi.shard_versions.erase(shard_id_t(shard))) {
+		  update = true;
+		}
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " erased to " << oi.version << dendl;
+	      } else if (!oi.shard_versions.count(shard_id_t(shard))) {
+		// Unwritten shard, previously up to date
+		oi.shard_versions[shard_id_t(shard)] = oi.prior_version;
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " set to " << oi.prior_version << dendl;
+		update = true;
+	      } else {
+		// Unwritten shard, already out of date
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " left at " << oi.shard_versions[shard_id_t(shard)] << dendl;
+              }
+	    } else {
+	      // Primary shards are always written and use oi.version
+	      ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " blank at " << oi.version << dendl;
+	    }
           }
-        }
+	}
+	if (update) {
+	  bufferlist bl;
+	  oi.encode(bl,osdmap->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
+	  op.attr_updates[OI_ATTR] = bl;
+	}
+      }
+
+      if (!op.attr_updates.empty()) {
+	map<string, bufferlist, less<>> to_set;
+	for (auto &&[attr, update]: op.attr_updates) {
+	  if (update) {
+	    to_set[attr] = *(update);
+	  } else {
+	    for (auto &&st : *transactions) {
+	      st.second.rmattr(
+		coll_t(spg_t(pgid, st.first)),
+		ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+		attr);
+	    }
+	  }
+	  if (obc) {
+	    auto citer = obc->attr_cache.find(attr);
+	    if (entry) {
+	      if (citer != obc->attr_cache.end()) {
+		// won't overwrite anything we put in earlier
+		xattr_rollback.insert(
+		  make_pair(
+		    attr,
+		    std::optional<bufferlist>(citer->second)));
+	      } else {
+		// won't overwrite anything we put in earlier
+		xattr_rollback.insert(
+		  make_pair(
+		    attr,
+		    std::nullopt));
+	      }
+	    }
+	    if (update) {
+	      obc->attr_cache[attr] = *(update);
+	    } else if (citer != obc->attr_cache.end()) {
+	      obc->attr_cache.erase(citer);
+	    }
+	  } else {
+	    ceph_assert(!entry);
+	  }
+	}
+	for (auto &&st : *transactions) {
+	  if (!sinfo.is_nonprimary_shard(st.first)) {
+	    // Primary shard - Update all attributes
+	    st.second.setattrs(
+	      coll_t(spg_t(pgid, st.first)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	      to_set);
+	  } else if (entry->is_written_shard(st.first)) {
+	    // Written shard - Only update object_info attribute
+	    st.second.setattr(
+	      coll_t(spg_t(pgid, st.first)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
+	      OI_ATTR,
+	      to_set[OI_ATTR]);
+          } // Else: Unwritten shard - Don't update any attributes
+	}
+	ceph_assert(!xattr_rollback.empty());
+      }
+      if (entry && !xattr_rollback.empty()) {
+	entry->mod_desc.setattrs(xattr_rollback);
+      }
+
+      if (!op.is_delete()) {
+	bufferlist hbuf;
+        if (plan.hinfo) {
+	  encode(*plan.hinfo, hbuf);
+	  for (auto &&i : *transactions) {
+	    if (!sinfo.is_nonprimary_shard(i.first)) {
+	      i.second.setattr(
+		coll_t(spg_t(pgid, i.first)),
+		ghobject_t(oid, ghobject_t::NO_GEN, i.first),
+		ECUtil::get_hinfo_key(),
+		hbuf);
+	    }
+	  }
+	}
       }
     });
 }

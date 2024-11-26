@@ -442,11 +442,6 @@ public:
     const hobject_t &hoid,
     std::map<std::string, ceph::buffer::list, std::less<>> *out) override;
 
-  void rollback_append(
-    const hobject_t &hoid,
-    uint64_t old_size,
-    ObjectStore::Transaction *t) override;
-
   bool auto_repair_supported() const override { return true; }
 
   int be_deep_scrub(

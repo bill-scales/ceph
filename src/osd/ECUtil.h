@@ -207,6 +207,12 @@ public:
     return full_stripes;
   }
 
+  /**
+   * Return true if shard does not require metadata updates
+   */
+  bool is_nonprimary_shard(const shard_id_t shard) const {
+    return pool->is_nonprimary_shard(shard);
+  }
   bool supports_ec_optimizations() const {
     return pool->allows_ecoptimizations();
   }
