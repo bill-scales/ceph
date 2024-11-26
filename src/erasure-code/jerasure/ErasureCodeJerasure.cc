@@ -112,6 +112,39 @@ int ErasureCodeJerasure::encode_chunks(const set<int> &want_to_encode,
   return 0;
 }
 
+int ErasureCodeJerasure::encode_chunks_ptr(const set<int> &want_to_encode,
+                                           map<int, bufferptr> &encoded)
+{
+  char *chunks[k + m];
+  memset(chunks, 0, sizeof(char*) * (k + m));
+  uint64_t size = 0;
+
+  for (auto &&[shard, ptr] : encoded) {
+    if (size == 0) size = ptr.length();
+    else ceph_assert(size == ptr.length());
+    chunks[shard] = ptr.c_str();
+  }
+
+  char *zeros = nullptr;
+
+  for (int i = 0; i < k + m; i++) {
+    if (encoded.contains(i)) continue;
+
+    if (zeros == nullptr) {
+      zeros = (char*)malloc(size);
+      memset(zeros, 0, size);
+    }
+
+    chunks[i] = zeros;
+  }
+
+  jerasure_encode(&chunks[0], &chunks[k], encoded[0].length());
+
+  free(zeros);
+
+  return 0;
+}
+
 int ErasureCodeJerasure::decode_chunks(const set<int> &want_to_read,
 				       const map<int, bufferlist> &chunks,
 				       map<int, bufferlist> *decoded)

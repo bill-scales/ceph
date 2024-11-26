@@ -65,6 +65,9 @@ public:
   int encode_chunks(const std::set<int> &want_to_encode,
 		    std::map<int, ceph::buffer::list> *encoded) override;
 
+  int encode_chunks_ptr(const std::set<int> &want_to_encode,
+                  std::map<int, ceph::buffer::ptr> &encoded) override;
+
   int decode_chunks(const std::set<int> &want_to_read,
 		    const std::map<int, ceph::buffer::list> &chunks,
 		    std::map<int, ceph::buffer::list> *decoded) override;

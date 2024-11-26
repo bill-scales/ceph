@@ -370,6 +370,9 @@ namespace ceph {
     virtual int encode_chunks(const std::set<int> &want_to_encode,
                               std::map<int, bufferlist> *encoded) = 0;
 
+    virtual int encode_chunks_ptr(const std::set<int> &want_to_encode,
+                          std::map<int, bufferptr> &encoded) = 0;
+
     /**
      * Decode the **chunks** and store at least **want_to_read**
      * chunks in **decoded**.

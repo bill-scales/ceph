@@ -39,188 +39,215 @@ using std::vector;
 using ceph::bufferlist;
 
 namespace ceph {
-const unsigned ErasureCode::SIMD_ALIGN = 32;
+  const unsigned ErasureCode::SIMD_ALIGN = 32;
 
-int ErasureCode::init(
-  ErasureCodeProfile &profile,
-  std::ostream *ss)
-{
-  int err = 0;
-  err |= to_string("crush-root", profile,
-		   &rule_root,
-		   DEFAULT_RULE_ROOT, ss);
-  err |= to_string("crush-failure-domain", profile,
-		   &rule_failure_domain,
-		   DEFAULT_RULE_FAILURE_DOMAIN, ss);
-  err |= to_int("crush-osds-per-failure-domain", profile,
-		&rule_osds_per_failure_domain,
-		"0", ss);
-  err |= to_int("crush-num-failure-domains", profile,
-		&rule_num_failure_domains,
-		"0", ss);
-  err |= to_string("crush-device-class", profile,
-		   &rule_device_class,
-		   "", ss);
-  if (err)
-    return err;
-  _profile = profile;
-  return 0;
-}
+  int ErasureCode::init(
+    ErasureCodeProfile &profile,
+    std::ostream *ss)
+  {
+    int err = 0;
+    err |= to_string("crush-root", profile,
+                     &rule_root,
+                     DEFAULT_RULE_ROOT, ss);
+    err |= to_string("crush-failure-domain", profile,
+                     &rule_failure_domain,
+                     DEFAULT_RULE_FAILURE_DOMAIN, ss);
+    err |= to_int("crush-osds-per-failure-domain", profile,
+                  &rule_osds_per_failure_domain,
+                  "0", ss);
+    err |= to_int("crush-num-failure-domains", profile,
+                  &rule_num_failure_domains,
+                  "0", ss);
+    err |= to_string("crush-device-class", profile,
+                     &rule_device_class,
+                     "", ss);
+    if (err)
+      return err;
+    _profile = profile;
+    return 0;
+  }
 
-int ErasureCode::create_rule(
-  const std::string &name,
-  CrushWrapper &crush,
-  std::ostream *ss) const
-{
-  if (rule_osds_per_failure_domain <= 1) {
-    return crush.add_simple_rule(
-      name,
-      rule_root,
-      rule_failure_domain,
-      rule_num_failure_domains,
-      rule_device_class,
-      "indep",
-      pg_pool_t::TYPE_ERASURE,
-      ss);
-  } else {
-    if (rule_num_failure_domains < 1)  {
-      if (ss) {
-	*ss << "crush-num-failure-domains " << rule_num_failure_domains
-	    << " must be >= 1 if crush-osds-per-failure-domain specified";
-	return -EINVAL;
+  int ErasureCode::create_rule(
+    const std::string &name,
+    CrushWrapper &crush,
+    std::ostream *ss) const
+  {
+    if (rule_osds_per_failure_domain <= 1) {
+      return crush.add_simple_rule(
+        name,
+        rule_root,
+        rule_failure_domain,
+        rule_num_failure_domains,
+        rule_device_class,
+        "indep",
+        pg_pool_t::TYPE_ERASURE,
+        ss);
+    } else {
+      if (rule_num_failure_domains < 1)  {
+        if (ss) {
+          *ss << "crush-num-failure-domains " << rule_num_failure_domains
+              << " must be >= 1 if crush-osds-per-failure-domain specified";
+          return -EINVAL;
+        }
+      }
+      return crush.add_indep_multi_osd_per_failure_domain_rule(
+        name,
+        rule_root,
+        rule_failure_domain,
+        rule_num_failure_domains,
+        rule_osds_per_failure_domain,
+        rule_device_class,
+        ss);
+    }
+  }
+
+  int ErasureCode::sanity_check_k_m(int k, int m, ostream *ss)
+  {
+    if (k < 2) {
+      *ss << "k=" << k << " must be >= 2" << std::endl;
+      return -EINVAL;
+    }
+    if (m < 1) {
+      *ss << "m=" << m << " must be >= 1" << std::endl;
+      return -EINVAL;
+    }
+    return 0;
+  }
+
+  int ErasureCode::chunk_index(unsigned int i) const
+  {
+    return chunk_mapping.size() > i ? chunk_mapping[i] : i;
+  }
+
+  int ErasureCode::_minimum_to_decode(const set<int> &want_to_read,
+                                     const set<int> &available_chunks,
+                                     set<int> *minimum)
+  {
+    if (includes(available_chunks.begin(), available_chunks.end(),
+                 want_to_read.begin(), want_to_read.end())) {
+      *minimum = want_to_read;
+                 } else {
+                   unsigned int k = get_data_chunk_count();
+                   if (available_chunks.size() < (unsigned)k)
+                     return -EIO;
+                   set<int>::iterator i;
+                   unsigned j;
+                   for (i = available_chunks.begin(), j = 0; j < (unsigned)k; ++i, j++)
+                     minimum->insert(*i);
+                 }
+    return 0;
+  }
+
+  int ErasureCode::minimum_to_decode(const set<int> &want_to_read,
+                                     const set<int> &available_chunks,
+                                     map<int, vector<pair<int, int>>> *minimum)
+  {
+    set<int> minimum_shard_ids;
+    int r = _minimum_to_decode(want_to_read, available_chunks, &minimum_shard_ids);
+    if (r != 0) {
+      return r;
+    }
+    vector<pair<int, int>> default_subchunks;
+    default_subchunks.push_back(make_pair(0, get_sub_chunk_count()));
+    for (auto &&id : minimum_shard_ids) {
+      minimum->insert(make_pair(id, default_subchunks));
+    }
+    return 0;
+  }
+
+  int ErasureCode::minimum_to_decode_with_cost(const set<int> &want_to_read,
+                                               const map<int, int> &available,
+                                               set<int> *minimum)
+  {
+    set <int> available_chunks;
+    for (map<int, int>::const_iterator i = available.begin();
+         i != available.end();
+         ++i)
+      available_chunks.insert(i->first);
+    return _minimum_to_decode(want_to_read, available_chunks, minimum);
+  }
+
+  int ErasureCode::encode_prepare(const bufferlist &raw,
+                                  map<int, bufferlist> &encoded) const
+  {
+    unsigned int k = get_data_chunk_count();
+    unsigned int m = get_chunk_count() - k;
+    unsigned blocksize = get_chunk_size(raw.length());
+    unsigned padded_chunks = k - raw.length() / blocksize;
+    bufferlist prepared = raw;
+
+    for (unsigned int i = 0; i < k - padded_chunks; i++) {
+      bufferlist &chunk = encoded[chunk_index(i)];
+      chunk.substr_of(prepared, i * blocksize, blocksize);
+      chunk.rebuild_aligned_size_and_memory(blocksize, SIMD_ALIGN);
+      ceph_assert(chunk.is_contiguous());
+    }
+    if (padded_chunks) {
+      unsigned remainder = raw.length() - (k - padded_chunks) * blocksize;
+      bufferptr buf(buffer::create_aligned(blocksize, SIMD_ALIGN));
+
+      raw.begin((k - padded_chunks) * blocksize).copy(remainder, buf.c_str());
+      buf.zero(remainder, blocksize - remainder);
+      encoded[chunk_index(k-padded_chunks)].push_back(std::move(buf));
+
+      for (unsigned int i = k - padded_chunks + 1; i < k; i++) {
+        bufferptr buf(buffer::create_aligned(blocksize, SIMD_ALIGN));
+        buf.zero();
+        encoded[chunk_index(i)].push_back(std::move(buf));
       }
     }
-    return crush.add_indep_multi_osd_per_failure_domain_rule(
-      name,
-      rule_root,
-      rule_failure_domain,
-      rule_num_failure_domains,
-      rule_osds_per_failure_domain,
-      rule_device_class,
-      ss);
-  }
-}
-
-int ErasureCode::sanity_check_k_m(int k, int m, ostream *ss)
-{
-  if (k < 2) {
-    *ss << "k=" << k << " must be >= 2" << std::endl;
-    return -EINVAL;
-  }
-  if (m < 1) {
-    *ss << "m=" << m << " must be >= 1" << std::endl;
-    return -EINVAL;
-  }
-  return 0;
-}
-
-int ErasureCode::chunk_index(unsigned int i) const
-{
-  return chunk_mapping.size() > i ? chunk_mapping[i] : i;
-}
-
-int ErasureCode::_minimum_to_decode(const set<int> &want_to_read,
-                                   const set<int> &available_chunks,
-                                   set<int> *minimum)
-{
-  if (includes(available_chunks.begin(), available_chunks.end(),
-	       want_to_read.begin(), want_to_read.end())) {
-    *minimum = want_to_read;
-  } else {
-    unsigned int k = get_data_chunk_count();
-    if (available_chunks.size() < (unsigned)k)
-      return -EIO;
-    set<int>::iterator i;
-    unsigned j;
-    for (i = available_chunks.begin(), j = 0; j < (unsigned)k; ++i, j++)
-      minimum->insert(*i);
-  }
-  return 0;
-}
-
-int ErasureCode::minimum_to_decode(const set<int> &want_to_read,
-                                   const set<int> &available_chunks,
-                                   map<int, vector<pair<int, int>>> *minimum)
-{
-  set<int> minimum_shard_ids;
-  int r = _minimum_to_decode(want_to_read, available_chunks, &minimum_shard_ids);
-  if (r != 0) {
-    return r;
-  }
-  vector<pair<int, int>> default_subchunks;
-  default_subchunks.push_back(make_pair(0, get_sub_chunk_count()));
-  for (auto &&id : minimum_shard_ids) {
-    minimum->insert(make_pair(id, default_subchunks));
-  }
-  return 0;
-}
-
-int ErasureCode::minimum_to_decode_with_cost(const set<int> &want_to_read,
-                                             const map<int, int> &available,
-                                             set<int> *minimum)
-{
-  set <int> available_chunks;
-  for (map<int, int>::const_iterator i = available.begin();
-       i != available.end();
-       ++i)
-    available_chunks.insert(i->first);
-  return _minimum_to_decode(want_to_read, available_chunks, minimum);
-}
-
-int ErasureCode::encode_prepare(const bufferlist &raw,
-                                map<int, bufferlist> &encoded) const
-{
-  unsigned int k = get_data_chunk_count();
-  unsigned int m = get_chunk_count() - k;
-  unsigned blocksize = get_chunk_size(raw.length());
-  unsigned padded_chunks = k - raw.length() / blocksize;
-  bufferlist prepared = raw;
-
-  for (unsigned int i = 0; i < k - padded_chunks; i++) {
-    bufferlist &chunk = encoded[chunk_index(i)];
-    chunk.substr_of(prepared, i * blocksize, blocksize);
-    chunk.rebuild_aligned_size_and_memory(blocksize, SIMD_ALIGN);
-    ceph_assert(chunk.is_contiguous());
-  }
-  if (padded_chunks) {
-    unsigned remainder = raw.length() - (k - padded_chunks) * blocksize;
-    bufferptr buf(buffer::create_aligned(blocksize, SIMD_ALIGN));
-
-    raw.begin((k - padded_chunks) * blocksize).copy(remainder, buf.c_str());
-    buf.zero(remainder, blocksize - remainder);
-    encoded[chunk_index(k-padded_chunks)].push_back(std::move(buf));
-
-    for (unsigned int i = k - padded_chunks + 1; i < k; i++) {
-      bufferptr buf(buffer::create_aligned(blocksize, SIMD_ALIGN));
-      buf.zero();
-      encoded[chunk_index(i)].push_back(std::move(buf));
+    for (unsigned int i = k; i < k + m; i++) {
+      bufferlist &chunk = encoded[chunk_index(i)];
+      chunk.push_back(buffer::create_aligned(blocksize, SIMD_ALIGN));
     }
-  }
-  for (unsigned int i = k; i < k + m; i++) {
-    bufferlist &chunk = encoded[chunk_index(i)];
-    chunk.push_back(buffer::create_aligned(blocksize, SIMD_ALIGN));
+
+    return 0;
   }
 
-  return 0;
-}
+  int ErasureCode::encode(const set<int> &want_to_encode,
+                          const bufferlist &in,
+                          map<int, bufferlist> *encoded)
+  {
+    unsigned int k = get_data_chunk_count();
+    unsigned int m = get_chunk_count() - k;
+    bufferlist out;
+    int err = encode_prepare(in, *encoded);
+    if (err)
+      return err;
+    encode_chunks(want_to_encode, encoded);
+    for (unsigned int i = 0; i < k + m; i++) {
+      if (want_to_encode.count(i) == 0)
+        encoded->erase(i);
+    }
+    return 0;
+  }
 
-int ErasureCode::encode(const set<int> &want_to_encode,
-                        const bufferlist &in,
-                        map<int, bufferlist> *encoded)
+int ErasureCode::encode_chunks_ptr(const std::set<int> &want_to_encode,
+                      std::map<int, bufferptr> &encoded)
 {
   unsigned int k = get_data_chunk_count();
   unsigned int m = get_chunk_count() - k;
-  bufferlist out;
-  int err = encode_prepare(in, *encoded);
-  if (err)
-    return err;
-  encode_chunks(want_to_encode, encoded);
-  for (unsigned int i = 0; i < k + m; i++) {
-    if (want_to_encode.count(i) == 0)
-      encoded->erase(i);
+
+  // This provides compatibility for plugins which do not support the newer
+  // interface.
+  map<int, bufferlist> encoded_bl;
+  uint64_t size = 0;
+  for (auto &&[shard, ptr] : encoded) {
+    if (size == 0) size = ptr.length();
+    else ceph_assert(size == ptr.length());
+    bufferlist bl;
+    bl.append(ptr);
+    encoded_bl.emplace(shard, std::move(bl));
   }
+
+  for (int i = 0; i < k + m; i++) {
+    if (!encoded.contains(i)) encoded_bl[i].append_zero(size);
+  }
+
+  encode_chunks(want_to_encode, &encoded_bl);
+
   return 0;
-}
+};
 
 int ErasureCode::_decode(const set<int> &want_to_read,
 			 const map<int, bufferlist> &chunks,

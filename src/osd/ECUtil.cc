@@ -400,67 +400,151 @@ namespace ECUtil {
     }
   }
 
+  shard_extent_map_t::slice_iterator::slice_iterator(shard_extent_map_t &sem) : sem(sem)
+  {
+    for (auto &&[shard, emap] : sem.extent_maps) {
+      auto emap_iter = emap.begin();
+      auto bl_iter = emap_iter.get_val().begin();
+      auto p = make_pair(std::move(emap_iter), std::move(bl_iter));
+      iters.emplace(shard, std::move(p));
+
+      if (emap_iter.get_off() < start) {
+        start = emap_iter.get_off();
+      }
+    }
+
+    advance();
+  }
+
+  void shard_extent_map_t::slice_iterator::advance()
+  {
+    slice.clear();
+    offset = start;
+    end =  (uint64_t)-1;
+
+    if (iters.empty()) return;
+
+    // First we find the last buffer in the list
+    for (auto &&[shard, iters] : iters) {
+      auto &&[emap_iter, bl_iter] = iters;
+      uint64_t iter_offset = emap_iter.get_off() + bl_iter.get_off();
+      ceph_assert(iter_offset >= start);
+      // If this iterator is after the current offset, then we will ignore
+      // it for this buffer ptr. The end must move to or before this point.
+      if (iter_offset > start && iter_offset < end) {
+        end = iter_offset;
+        continue;
+      }
+
+      uint64_t iter_end = iter_offset + bl_iter.get_current_ptr().length();
+      if (iter_end < end) {
+        end = iter_end;
+      }
+    }
+
+    for (auto &&iter = iters.begin(); iter != iters.end();) {
+      auto shard = iter->first;
+      auto &&[emap_iter, bl_iter] = iter->second;
+      uint64_t iter_offset = emap_iter.get_off() + bl_iter.get_off();
+      bool erase = false;
+
+      // Ignore any blank buffers.
+      if (iter_offset == start) {
+        ceph_assert(iter_offset == start);
+
+        // Create a new buffer pointer for the result. We don't want the client
+        // manipulating the ptr.
+        slice.emplace(
+          shard, bufferptr(bl_iter.get_current_ptr(), 0,end - start));
+
+        // Now we need to move on the iterators.
+        bl_iter += end - start;
+
+        // If we have reached the end of the extent, we need to move that on too.
+        if (bl_iter == emap_iter.get_val().end()) {
+          ++emap_iter;
+          if (emap_iter == sem.get_extent_map(shard).end()) {
+            erase = true;
+          } else {
+            iters.at(shard).second = emap_iter.get_val().begin();
+          }
+        }
+      } else ceph_assert(iter_offset > start);
+
+      if (erase) iter = iters.erase(iter);
+      else ++iter;
+    }
+
+    // We can now move the offset on.
+    length = end - start;
+    start = end;
+
+    // The above can sometimes create an empty buffer out of a gap. This is
+    // not desirable, so we run again in such an occasion.
+    if (slice.empty()) {
+      advance();
+    }
+  }
+
+  shard_extent_map_t::slice_iterator shard_extent_map_t::begin_slice_iterator()
+  {
+    return slice_iterator(*this);
+  }
+
+  bool shard_extent_map_t::slice_iterator::is_page_aligned()
+  {
+    for (auto &&[_, ptr] : slice) {
+      uintptr_t p = (uintptr_t)ptr.c_str();
+      if (p & ~CEPH_PAGE_MASK) return false;
+      if ((p + ptr.length()) & ~CEPH_PAGE_MASK) return false;
+    }
+
+    return true;
+  }
+
+
   /* Encode parity chunks, using the encode_chunks interface into the
    * erasure coding.  This generates all parity.
    */
   int shard_extent_map_t::encode(ErasureCodeInterfaceRef& ecimpl,
     const HashInfoRef &hinfo,
     uint64_t before_ro_size) {
+    std::set<int> shards;
+    for (int shard : sinfo->get_parity_shards()) {
+      shards.insert(shard);
+    }
 
-    extent_set encode_set = get_extent_superset();
-    encode_set.align(CEPH_PAGE_SIZE);
+    bool rebuild_req = false;
 
-    uint64_t chunk_size = 1024*1024; //sinfo->get_chunk_size();
+    for (auto iter = begin_slice_iterator(); !iter.is_end(); ++iter) {
+      if (!iter.is_page_aligned()) {
+        rebuild_req = true;
+        break;
+      }
 
-    for (auto &&[_offset, _length] : encode_set) {
-      for (uint64_t offset = _offset;
-        offset < _offset + _length;
-        offset += chunk_size) {
+      int r = ecimpl->encode_chunks_ptr(shards, iter.get_bufferptrs());
+      if (r) return r;
+    }
 
-        uint64_t length = std::min(chunk_size, _offset + _length - offset);
+    if (rebuild_req) {
+      pad_and_rebuild_to_page_align();
+      return encode(ecimpl, hinfo, before_ro_size);
+    }
 
-        std::set<int> shards;
-        std::map<int, buffer::list> chunk_buffers;
-
-        for (int raw_shard = 0; raw_shard< sinfo->get_k_plus_m(); raw_shard++) {
-          int shard = sinfo->get_shard(raw_shard);
-          zero_pad(shard, offset, length);
-          get_buffer(shard, offset, length, chunk_buffers[shard]);
-
-          ceph_assert(chunk_buffers[shard].length() == length);
-          chunk_buffers[shard].rebuild_aligned_size_and_memory(sinfo->get_chunk_size(), SIMD_ALIGN);
-
-          // The above can replace the buffer, which will not make it back into
-          // the extent map, so re-insert this buffer back into the original
-          // extent map. We can probably optimise this out much of the time.
-          extent_maps[shard].insert(offset, length, chunk_buffers[shard]);
-
-          if (raw_shard >= sinfo->get_k()) {
-            shards.insert(raw_shard); // FIXME: Why raw shards??? Needs fix or comment.
-          }
-        }
-
-        /* Eventually this will call a new API to allow for delta writes. For now
-         * however, we call this interface, which will segfault if a full stripe
-         * is not provided.
-         */
-        int r = ecimpl->encode_chunks(shards, &chunk_buffers);
-        if (r) return r;
-
-        /* NEEDS REVIEW:  The following calculates the new hinfo CRCs. This is
-         *                 currently considering ALL the buffers, including the
-         *                 parity buffers.  Is this really right?
-         *                 Also, does this really belong here? Its convenient
-         *                 because have just built the buffer list...
-         */
-        if (hinfo && ro_start >= before_ro_size) {
-          ceph_assert(ro_start == before_ro_size);
-          hinfo->append(
-            offset,
-            chunk_buffers);
-        }
+    if (hinfo && ro_start >= before_ro_size) {
+      /* NEEDS REVIEW:  The following calculates the new hinfo CRCs. This is
+       *                 currently considering ALL the buffers, including the
+       *                 parity buffers.  Is this really right?
+       *                 Also, does this really belong here? Its convenient
+       *                 because have just built the buf§fer list...
+       */
+      for (auto iter = begin_slice_iterator(); !iter.is_end(); ++iter) {
+        ceph_assert(ro_start == before_ro_size);
+        hinfo->append(iter.get_offset(),  iter.get_bufferptrs());
       }
     }
+
+
     return 0;
   }
 
@@ -521,6 +605,40 @@ namespace ECUtil {
     if (did_decode) compute_ro_range();
 
     return r;
+  }
+
+  void shard_extent_map_t::pad_and_rebuild_to_page_align()
+  {
+    bool resized = false;
+    for (auto &&[shard, emap]: extent_maps) {
+      for ( auto i = emap.begin(); i != emap.end(); ++i) {
+        bool resized_i = false;
+        bufferlist bl = i.get_val();
+        uint64_t start = i.get_off();
+        uint64_t end = start + i.get_len();
+
+        if ((start & ~CEPH_PAGE_MASK) != 0) {
+          bl.prepend_zero(start - (start & CEPH_PAGE_MASK));
+          start = start & CEPH_PAGE_MASK;
+          resized_i = true;
+        }
+        if ((end & ~CEPH_PAGE_MASK) != 0) {
+          bl.append_zero((end & CEPH_PAGE_MASK) + CEPH_PAGE_SIZE - end);
+          end = (end & CEPH_PAGE_MASK) + CEPH_PAGE_SIZE;
+          resized_i = true;
+        }
+
+        // Perhaps we can get away without page aligning here and only SIMD
+        // align. However, typical workloads are actually page aligned already,
+        // so this should not cause problems on any sensible workload.
+        if (bl.rebuild_aligned_size_and_memory(bl.length(), CEPH_PAGE_SIZE) || resized_i) {
+          emap.insert(start, end - start, bl);
+        }
+        if (resized_i) resized = true;
+      }
+    }
+
+    if (resized) compute_ro_range();
   }
 
   std::map<int, bufferlist> shard_extent_map_t::slice(int offset, int length) const
@@ -737,18 +855,17 @@ namespace ECUtil {
 }
 
 void ECUtil::HashInfo::append(uint64_t old_size,
-			      map<int, bufferlist> &to_append) {
+			      map<int, bufferptr> &to_append) {
   ceph_assert(old_size == total_chunk_size);
   uint64_t size_to_append = to_append.begin()->second.length();
   if (has_chunk_hash()) {
     ceph_assert(to_append.size() == cumulative_shard_hashes.size());
-    for (map<int, bufferlist>::iterator i = to_append.begin();
-	 i != to_append.end();
-	 ++i) {
-      ceph_assert(size_to_append == i->second.length());
-      ceph_assert((unsigned)i->first < cumulative_shard_hashes.size());
-      uint32_t new_hash = i->second.crc32c(cumulative_shard_hashes[i->first]);
-      cumulative_shard_hashes[i->first] = new_hash;
+    for (auto &&[shard, ptr] : to_append) {
+      ceph_assert(size_to_append == ptr.length());
+      ceph_assert(shard < cumulative_shard_hashes.size());
+      cumulative_shard_hashes[shard] =
+        ceph_crc32c(cumulative_shard_hashes[shard],
+          (unsigned char*)ptr.c_str(), ptr.length());
     }
   }
   total_chunk_size += size_to_append;
@@ -823,12 +940,12 @@ void ECUtil::HashInfo::generate_test_instances(list<HashInfo*>& o)
 {
   o.push_back(new HashInfo(3));
   {
-    bufferlist bl;
-    bl.append_zero(20);
-    map<int, bufferlist> buffers;
-    buffers[0] = bl;
-    buffers[1] = bl;
-    buffers[2] = bl;
+    bufferptr bp;
+    bp.append_zeros(20);
+    map<int, bufferptr> buffers;
+    buffers[0] = bp;
+    buffers[1] = bp;
+    buffers[2] = bp;
     o.back()->append(0, buffers);
     o.back()->append(20, buffers);
   }

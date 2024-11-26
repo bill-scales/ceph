@@ -568,3 +568,150 @@ TEST(ECUtil, sinfo_ro_size_to_read_mask) {
     ASSERT_EQ(ref_zero, zero_mask);
   }
 }
+
+TEST(ECUtil, slice_iterator)
+{
+  stripe_info_t sinfo(2, 2*4096, 1);
+  shard_extent_map_t sem(&sinfo);
+  {
+    auto iter = sem.begin_slice_iterator();
+    ASSERT_TRUE(iter.get_bufferptrs().empty());
+  }
+
+  bufferlist a, b;
+  a.append_zero(8192);
+  a.c_str()[0] = 'A';
+  a.c_str()[4096] = 'C';
+  b.append_zero(4096);
+  b.c_str()[0] = 'B';
+
+  sem.insert_in_shard(0, 0, a);
+  sem.insert_in_shard(1, 0, b);
+  {
+    auto iter = sem.begin_slice_iterator();
+
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(0, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_EQ(2, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ(4096, out[1].length());
+      ASSERT_EQ('A', out[0].c_str()[0]);
+      ASSERT_EQ('B', out[1].c_str()[0]);
+    }
+
+    ++iter;
+    {
+      auto out = iter.get_bufferptrs();
+
+      ASSERT_EQ(4096, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(1, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ('C', out[0].c_str()[0]);
+    }
+
+    ++iter;
+    ASSERT_TRUE(iter.is_end());
+  }
+
+  // Create a gap.
+  bufferlist d, e;
+  d.append_zero(4096);
+  d.c_str()[0] = 'D';
+  e.append_zero(4096);
+  e.c_str()[0] = 'E';
+  sem.insert_in_shard(0, 4096*4, d);
+  sem.insert_in_shard(1, 4096*4, e);
+
+  {
+    auto iter = sem.begin_slice_iterator();
+
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(0, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(2, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ(4096, out[1].length());
+      ASSERT_EQ('A', out[0].c_str()[0]);
+      ASSERT_EQ('B', out[1].c_str()[0]);
+    }
+
+    ++iter;
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(4096, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(1, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ('C', out[0].c_str()[0]);
+    }
+
+    ++iter;
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(4*4096, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(2, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ('D', out[0].c_str()[0]);
+      ASSERT_EQ('E', out[1].c_str()[0]);
+    }
+
+    ++iter;
+    ASSERT_TRUE(iter.is_end());
+  }
+
+  // Multiple buffers in each shard and gap at start.
+  sem.clear();
+  a.clear();
+  a.append_zero(4096);
+  a.c_str()[0] = 'A';
+  bufferlist c;
+  c.append_zero(4096);
+  c.c_str()[0] = 'C';
+
+  sem.insert_in_shard(0, 4096*1, a);
+  sem.insert_in_shard(1, 4096*1, b);
+  sem.insert_in_shard(0, 4096*2, c);
+  sem.insert_in_shard(1, 4096*2, d);
+
+  {
+    auto iter = sem.begin_slice_iterator();
+
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(4096, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(2, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ(4096, out[1].length());
+      ASSERT_EQ('A', out[0].c_str()[0]);
+      ASSERT_EQ('B', out[1].c_str()[0]);
+    }
+
+    ++iter;
+    {
+      auto out = iter.get_bufferptrs();
+      ASSERT_EQ(2*4096, iter.get_offset());
+      ASSERT_EQ(4096, iter.get_length());
+      ASSERT_FALSE(out.empty());
+      ASSERT_EQ(2, out.size());
+      ASSERT_EQ(4096, out[0].length());
+      ASSERT_EQ(4096, out[1].length());
+      ASSERT_EQ('C', out[0].c_str()[0]);
+      ASSERT_EQ('D', out[1].c_str()[0]);
+    }
+
+    ++iter;
+    ASSERT_TRUE(iter.is_end());
+  }
+
+}
