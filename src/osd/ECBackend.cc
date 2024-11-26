@@ -402,6 +402,7 @@ void ECBackend::RecoveryBackend::handle_recovery_read_complete(
   int r = op.returned_data->decode(ec_impl, missing);
   ceph_assert(r == 0);
   // We are never appending here, so we never need hinfo.
+  op.returned_data->insert_parity_buffers();
   r = op.returned_data->encode(ec_impl, NULL, 0);
   ceph_assert(r==0);
 

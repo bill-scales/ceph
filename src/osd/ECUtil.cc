@@ -391,6 +391,12 @@ namespace ECUtil {
     for (int i=sinfo->get_k(); i<sinfo->get_k_plus_m(); i++) {
       int shard = sinfo->get_shard(i);
       for (auto &&[offset, length] : encode_set) {
+        /* No need to recreate buffers we already have */
+        if (extent_maps.contains(shard)) {
+          extent_map emap = extent_maps.at(shard);
+          if (emap.contains(offset, length))
+            continue;
+        }
         std::set<int> shards;
         std::map<int, buffer::list> chunk_buffers;
         bufferlist bl;
