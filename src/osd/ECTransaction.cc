@@ -227,7 +227,7 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
         if (!_to_read.empty()) {
           reads.emplace(shard, std::move(_to_read));
         }
-      } else {
+      } else if (!outter_extent_superset.empty()) {
         will_write[shard].insert(outter_extent_superset);
       }
     }
