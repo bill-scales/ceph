@@ -46,6 +46,7 @@ using TripleReadOp = ceph::io_exerciser::TripleReadOp;
 using SingleWriteOp = ceph::io_exerciser::SingleWriteOp;
 using DoubleWriteOp = ceph::io_exerciser::DoubleWriteOp;
 using TripleWriteOp = ceph::io_exerciser::TripleWriteOp;
+using SingleAppendOp = ceph::io_exerciser::SingleAppendOp;
 using SingleFailedWriteOp = ceph::io_exerciser::SingleFailedWriteOp;
 using DoubleFailedWriteOp = ceph::io_exerciser::DoubleFailedWriteOp;
 using TripleFailedWriteOp = ceph::io_exerciser::TripleFailedWriteOp;
@@ -804,12 +805,15 @@ void ceph::io_sequence::tester::TestRunner::clear_tokens()
   tokens = split.end();
 }
 
-std::string ceph::io_sequence::tester::TestRunner::get_token()
+std::string ceph::io_sequence::tester::TestRunner::get_token(bool allow_eof)
 {
   while (line.empty() || tokens == split.end())
   {
     if (!std::getline(std::cin, line))
     {
+      if (allow_eof) {
+	return "done";
+      }
       throw std::runtime_error("End of input");
     }
     split = ceph::split(line);
@@ -922,7 +926,7 @@ bool ceph::io_sequence::tester::TestRunner::run_interactive_test()
 
   while (!done)
   {
-    const std::string op = get_token();
+    const std::string op = get_token(true);
     if (op == "done"  || op == "q" || op == "quit")
     {
       ioop = ceph::io_exerciser::DoneOp::generate();
@@ -986,6 +990,11 @@ bool ceph::io_sequence::tester::TestRunner::run_interactive_test()
       ioop = TripleWriteOp::generate(offset1, length1,
                                      offset2, length2,
                                      offset3, length3);
+    }
+    else if (op == "append")
+    {
+      uint64_t length = get_numeric_token();
+      ioop = SingleAppendOp::generate(length);
     }
     else if (op == "failedwrite")
     {

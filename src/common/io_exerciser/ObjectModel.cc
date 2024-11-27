@@ -95,7 +95,9 @@ void ObjectModel::applyIoOp(IoOp& op)
       ceph_assert(!reads.intersects(writeOp.offset[i], writeOp.length[i]));
       ceph_assert(!writes.intersects(writeOp.offset[i], writeOp.length[i]));
       writes.union_insert(writeOp.offset[i], writeOp.length[i]);
-      ceph_assert(writeOp.offset[i] + writeOp.length[i] <= contents.size());
+      if (writeOp.offset[i] + writeOp.length[i] > contents.size()) {
+	contents.resize(writeOp.offset[i] + writeOp.length[i]);
+      }
       std::generate(std::execution::seq,
                     std::next(contents.begin(), writeOp.offset[i]),
                     std::next(contents.begin(), writeOp.offset[i] + writeOp.length[i]),
@@ -187,6 +189,16 @@ void ObjectModel::applyIoOp(IoOp& op)
     verify_write_and_record_and_generate_seed(writeOp);
   }
   break;
+
+  case OpType::Append:
+  {
+    ceph_assert(created);
+    SingleAppendOp& appendOp = static_cast<SingleAppendOp&>(op);
+    appendOp.offset[0] = contents.size();
+    verify_write_and_record_and_generate_seed(appendOp);
+  }
+  break;
+
   case OpType::FailedWrite:
   {
     ceph_assert(created);

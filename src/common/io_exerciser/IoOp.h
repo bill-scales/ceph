@@ -146,6 +146,13 @@ namespace ceph {
                                                        uint64_t length3);
     };
 
+    class SingleAppendOp : public ReadWriteOp<OpType::Append, 1>
+    {
+      public:
+        SingleAppendOp(uint64_t length);
+        static std::unique_ptr<SingleAppendOp> generate(uint64_t length);
+    };
+
     class SingleFailedWriteOp : public ReadWriteOp<OpType::FailedWrite, 1>
     {
       public:

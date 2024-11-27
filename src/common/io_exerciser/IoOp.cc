@@ -20,6 +20,7 @@ using TripleWriteOp = ceph::io_exerciser::TripleWriteOp;
 using SingleFailedWriteOp = ceph::io_exerciser::SingleFailedWriteOp;
 using DoubleFailedWriteOp = ceph::io_exerciser::DoubleFailedWriteOp;
 using TripleFailedWriteOp = ceph::io_exerciser::TripleFailedWriteOp;
+using SingleAppendOp = ceph::io_exerciser::SingleAppendOp;
 
 namespace
 {
@@ -150,20 +151,25 @@ std::string ceph::io_exerciser::ReadWriteOp<opType, numIOs>
   ::to_string(uint64_t block_size) const
 {
   std::string offset_length_desc;
+  std::string length_desc;
   if (numIOs > 0)
   {
     offset_length_desc += fmt::format("offset1={}",
                                       value_to_string(this->offset[0] * block_size));
-    offset_length_desc += fmt::format(",length1={}",
+    length_desc += fmt::format("length1={}",
                                       value_to_string(this->length[0] * block_size));
+    offset_length_desc += "," + length_desc;
     for (int i = 1; i < numIOs; i++)
     {
+      std::string length;
       offset_length_desc += fmt::format(",offset{}={}",
                                         i+1,
                                         value_to_string(this->offset[i] * block_size));
-      offset_length_desc += fmt::format(",length{}={}",
+      length = fmt::format(",length{}={}",
                                         i+1,
                                         value_to_string(this->length[i] * block_size));
+      length_desc += length;
+      offset_length_desc += length;
     }
   }
   switch(opType)
@@ -180,6 +186,8 @@ std::string ceph::io_exerciser::ReadWriteOp<opType, numIOs>
       [[ fallthrough ]];
     case OpType::Write3:
       return fmt::format("Write{} ({})", numIOs, offset_length_desc);
+    case OpType::Append:
+      return fmt::format("Append{} ({})", numIOs, length_desc);
     case OpType::FailedWrite:
       [[ fallthrough ]];
     case OpType::FailedWrite2:
@@ -273,6 +281,17 @@ std::unique_ptr<TripleWriteOp> TripleWriteOp::generate(uint64_t offset1, uint64_
   return std::make_unique<TripleWriteOp>(offset1, length1,
                                          offset2, length2,
                                          offset3, length3);
+}
+
+SingleAppendOp::SingleAppendOp(uint64_t length) :
+  ReadWriteOp<OpType::Append, 1>({0}, {length})
+{
+
+}
+
+std::unique_ptr<SingleAppendOp> SingleAppendOp::generate(uint64_t length)
+{
+  return std::make_unique<SingleAppendOp>(length);
 }
 
 SingleFailedWriteOp::SingleFailedWriteOp(uint64_t offset, uint64_t length) :
