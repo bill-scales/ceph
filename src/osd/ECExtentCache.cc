@@ -226,6 +226,9 @@ namespace ECExtentCache {
       lru.mutex.unlock();
     }
 
+    for (auto && op :waiting_ops) {
+      op->cancel();
+    }
     waiting_ops.clear();
     objects.clear();
     active_ios = 0;

@@ -132,6 +132,7 @@ namespace ECExtentCache {
   public:
     explicit Op(GenContextURef<OpRef &> &&cache_ready_cb, Object &object) :
       object(object), cache_ready_cb(std::move(cache_ready_cb)) {}
+    void cancel() { delete cache_ready_cb.release(); }
     std::optional<ECUtil::shard_extent_map_t> get_result() { return result; }
     ECUtil::shard_extent_set_t get_writes() { return writes; }
 
@@ -171,7 +172,7 @@ namespace ECExtentCache {
 
   public:
     hobject_t oid;
-    Object(PG &pg, hobject_t oid) : pg(pg), sinfo(pg.sinfo), cache(&pg.sinfo), oid(oid), cct(pg.cct) {}
+    Object(PG &pg, hobject_t oid) : pg(pg), sinfo(pg.sinfo), cache(&pg.sinfo), cct(pg.cct), oid(oid) {}
   };
 
 
