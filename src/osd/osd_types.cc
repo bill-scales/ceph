@@ -4607,10 +4607,10 @@ void ObjectModDesc::visit(Visitor *visitor) const
 	break;
       }
       case ROLLBACK_EXTENTS: {
-	vector<pair<uint64_t, uint64_t> > extents;
+	vector<pair<uint64_t, uint64_t>> extents;
 	version_t gen;
 	uint64_t object_size;
-	set<int> shards;
+	vector<set<shard_id_t>> shards;
 	decode(gen, bp);
 	decode(extents, bp);
 	if (struct_v < 3) {
@@ -4680,13 +4680,14 @@ struct DumpVisitor : public ObjectModDesc::Visitor {
   }
   void rollback_extents(
     const version_t gen,
-    const vector<pair<uint64_t, uint64_t> > &extents,
+    const vector<pair<uint64_t, uint64_t>> &extents,
     const uint64_t object_size,
-    const set<int> shards) override {
+    const vector<set<shard_id_t>> &shards) override {
     f->open_object_section("op");
     f->dump_string("code", "ROLLBACK_EXTENTS");
     f->dump_unsigned("gen", gen);
     f->dump_unsigned("object_size", object_size);
+    f->dump_stream("extents") << extents;
     f->dump_stream("shards") << shards;
     f->dump_stream("snaps") << extents;
     f->close_section();

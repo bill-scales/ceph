@@ -267,27 +267,37 @@ void PGBackend::rollback(
     }
     void rollback_extents(
       const version_t gen,
-      const vector<pair<uint64_t, uint64_t> > &extents,
+      const std::vector<std::pair<uint64_t, uint64_t>> &extents,
       const uint64_t object_size,
-      const set<int> shards) override {
+      const std::vector<std::set<shard_id_t>> &shards) override {
       ObjectStore::Transaction temp;
       const pg_pool_t& pool = pg->get_parent()->get_pool();
       ceph_assert(entry.written_shards.empty() || pool.allows_ecoptimizations());
       auto dpp = pg->get_parent()->get_dpp();
-      if (shards.empty() || shards.contains(pg->get_parent()->whoami_shard().shard)) {
-	// Written shard - rollback extents
-	const uint64_t shard_size = pg->object_size_to_shard_size(object_size, pg->get_parent()->whoami_shard().shard);
-	ldpp_dout(dpp, 20) << "BILLR: written shard rollback_extents " <<
-	                      entry.written_shards << " " <<
-	                      pg->get_parent()->whoami_shard().shard << " " <<
-	                      object_size << " " <<
-	                      shard_size << dendl;
-	pg->rollback_extents(gen, extents, hoid, shard_size, &temp);
+      bool donework = false;
+      ceph_assert(shards.empty() || shards.size() == extents.size());
+      for (unsigned int i=0;i<extents.size();i++) {
+        if (shards.empty() || shards[i].empty() || shards[i].contains(pg->get_parent()->whoami_shard().shard)) {
+	  // Written shard - rollback extents
+	  const uint64_t shard_size = pg->object_size_to_shard_size(object_size, pg->get_parent()->whoami_shard().shard);
+	  ldpp_dout(dpp, 20) << "BILLR: written shard rollback_extents " <<
+	                        entry.written_shards << " " <<
+	                        pg->get_parent()->whoami_shard().shard << " " <<
+	                        object_size << " " <<
+	                        shard_size << dendl;
+	  pg->rollback_extents(gen, extents[i].first, extents[i].second, hoid, shard_size, &temp);
+	  donework = true;
+	} else {
+	  // Unwritten shard - nothing to rollback
+	  ldpp_dout(dpp, 20) << "BILLR: unwritten shard skipping rollback_extents " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+	}
+      }
+      if (donework) {
+	t.remove(
+	  pg->coll,
+	  ghobject_t(hoid, gen, pg->get_parent()->whoami_shard().shard));
 	temp.append(t);
 	temp.swap(t);
-      } else {
-	// Unwritten shard - nothing to rollback
-	ldpp_dout(dpp, 20) << "BILLR: unwritten shard skipping rollback_extents " << entry.written_shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
       }
     }
   };
@@ -308,6 +318,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
     ObjectStore::Transaction *t)
     : soid(soid), pg(pg), t(t) {}
   void rmobject(version_t old_version) override {
+    std::pair obj = make_pair(soid, old_version);
     pg->trim_rollback_object(
       soid,
       old_version,
@@ -316,19 +327,22 @@ struct Trimmer : public ObjectModDesc::Visitor {
   // try_rmobject defaults to rmobject
   void rollback_extents(
     const version_t gen,
-    const vector<pair<uint64_t, uint64_t> > &extents,
+    const std::vector<std::pair<uint64_t, uint64_t>> &extents,
     const uint64_t object_size,
-    const set<int> shards) override {
-    if (shards.empty() || shards.contains(pg->get_parent()->whoami_shard().shard)) {
-      auto dpp = pg->get_parent()->get_dpp();
-      ldpp_dout(dpp, 20) << __func__ << " BILLT: written_shard trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
-      pg->trim_rollback_object(
-        soid,
-        gen,
-        t);
-    } else {
-      auto dpp = pg->get_parent()->get_dpp();
-      ldpp_dout(dpp, 20) << __func__ << " BILLT: not written_shard skipping trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+    const std::vector<std::set<shard_id_t>> &shards) override {
+    auto dpp = pg->get_parent()->get_dpp();
+    ceph_assert(shards.empty() || shards.size() == extents.size());
+    for (unsigned int i=0;i<extents.size();i++) {
+      if (shards.empty() || shards[i].empty() || shards[i].contains(pg->get_parent()->whoami_shard().shard)) {
+        ldpp_dout(dpp, 20) << __func__ << " BILLT: written_shard trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+        pg->trim_rollback_object(
+          soid,
+          gen,
+          t);
+	break;
+      } else {
+	ldpp_dout(dpp, 20) << __func__ << " BILLT: not written_shard skipping trim " << shards << " " << pg->get_parent()->whoami_shard().shard << dendl;
+      }
     }
   }
 };
@@ -642,34 +656,30 @@ void PGBackend::rollback_try_stash(
 
 void PGBackend::rollback_extents(
   version_t gen,
-  const vector<pair<uint64_t, uint64_t> > &extents,
+  const uint64_t offset,
+  uint64_t length,
   const hobject_t &hoid,
   const uint64_t shard_size,
   ObjectStore::Transaction *t) {
   auto shard = get_parent()->whoami_shard().shard;
-  for (auto [offset, length]: extents) {
-    if (offset >= shard_size) {
-      // extent on this shard is beyond the end of the object - nothing to do
-      dout(20) << __func__ << " BILLR: " << hoid << " " << offset << "~" << length << " is out of range " << shard_size << dendl;
-    } else {
-      if (offset + length > shard_size) {
-	dout(20) << __func__ << " BILLR: " << length << " is being truncated" << dendl;
-	// extent on this shard goes beyond end of the object - truncate length
-	length = shard_size - offset;
-      }
-      dout(20) << __func__ << " BILLR: " << hoid << " " << offset << "~" << length << dendl;
-      t->clone_range(
-	coll,
-	ghobject_t(hoid, gen, shard),
-	ghobject_t(hoid, ghobject_t::NO_GEN, shard),
-	offset,
-	length,
-	offset);
+  if (offset >= shard_size) {
+    // extent on this shard is beyond the end of the object - nothing to do
+    dout(20) << __func__ << " BILLR: " << hoid << " " << offset << "~" << length << " is out of range " << shard_size << dendl;
+  } else {
+    if (offset + length > shard_size) {
+      dout(20) << __func__ << " BILLR: " << length << " is being truncated" << dendl;
+      // extent on this shard goes beyond end of the object - truncate length
+      length = shard_size - offset;
     }
+    dout(20) << __func__ << " BILLR: " << hoid << " " << offset << "~" << length << dendl;
+    t->clone_range(
+      coll,
+      ghobject_t(hoid, gen, shard),
+      ghobject_t(hoid, ghobject_t::NO_GEN, shard),
+      offset,
+      length,
+      offset);
   }
-  t->remove(
-    coll,
-    ghobject_t(hoid, gen, shard));
 }
 
 void PGBackend::trim_rollback_object(

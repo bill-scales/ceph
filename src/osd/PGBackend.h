@@ -539,7 +539,8 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
    /// Clone the extents back into place
    void rollback_extents(
      version_t gen,
-     const std::vector<std::pair<uint64_t, uint64_t> > &extents,
+     const uint64_t offset,
+     uint64_t length,
      const hobject_t &hoid,
      const uint64_t shard_size,
      ObjectStore::Transaction *t);

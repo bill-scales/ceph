@@ -489,7 +489,8 @@ void ECTransaction::generate_transactions(
       }
       debug(oid, "to_write", to_write, dpp);
 
-      bool overwrite = false;
+      std::vector<std::pair<uint64_t,uint64_t>> rollback_extents;
+      std::vector<std::set<shard_id_t>> rollback_shards;
 
       if (op.truncate && op.truncate->first < plan.orig_size) {
 	ceph_assert(!op.is_fresh_object());
@@ -503,14 +504,9 @@ void ECTransaction::generate_transactions(
 	  uint64_t restore_len = sinfo.aligned_logical_offset_to_chunk_offset(
 	    plan.orig_size -
 	    sinfo.logical_to_prev_stripe_offset(op.truncate->first));
-	  set<int> want_to_write;
-	  overwrite = true;
-	  entry->mod_desc.rollback_extents(
-	    entry->version.version,
-	    restore_from,
-	    restore_len,
-	    ECUtil::align_page_next(plan.orig_size),
-	    want_to_write);
+	  set<shard_id_t> all_shards;
+	  rollback_extents.emplace_back(make_pair(restore_from,restore_len));
+	  rollback_shards.emplace_back(all_shards);
 	  for (auto &&[shard, t]: *transactions) {
 	    t.touch(
 	      coll_t(spg_t(pgid, shard)),
@@ -571,11 +567,11 @@ void ECTransaction::generate_transactions(
       ECUtil::shard_extent_set_t cloneable_range;
       sinfo.ro_size_to_read_mask (clone_max, cloneable_range);
 
-      set<int> touched;
+      set<shard_id_t> touched;
 
       for (auto &[start, len] : clone_ranges) {
-        set<int> to_clone_shards;
-        int clone_end = 0;
+        set<shard_id_t> to_clone_shards;
+        uint64_t clone_end = 0;
 
         for (auto &&[shard, eset] : plan.will_write) {
           entry->written_shards.insert(shard);
@@ -603,11 +599,11 @@ void ECTransaction::generate_transactions(
           auto &&t = (*transactions)[shard_id];
 
           // Only touch once.
-          if (!touched.contains(shard)) {
+          if (!touched.contains(shard_id_t(shard))) {
             t.touch(
               coll_t(spg_t(pgid, shard_id)),
               ghobject_t(oid, entry->version.version, shard_id));
-            touched.insert(shard);
+            touched.insert(shard_id_t(shard));
           }
           t.clone_range(
             coll_t(spg_t(pgid, shard_id)),
@@ -618,7 +614,7 @@ void ECTransaction::generate_transactions(
             start);
 
           // We have done a clone, so tell the rollback.
-          to_clone_shards.insert(shard);
+          to_clone_shards.insert(shard_id_t(shard));
         }
 
         // It is more efficent to store an empty set to represent the common
@@ -627,13 +623,8 @@ void ECTransaction::generate_transactions(
           to_clone_shards.clear();
         }
         if (clone_end > start) {
-          overwrite = true;
-          entry->mod_desc.rollback_extents(
-            entry->version.version,
-            start,
-            clone_end - start,
-            ECUtil::align_page_next(plan.orig_size),
-            to_clone_shards);
+	  rollback_extents.emplace_back(make_pair(start, clone_end - start));
+	  rollback_shards.emplace_back(to_clone_shards);
         }
       }
 
@@ -647,9 +638,16 @@ void ECTransaction::generate_transactions(
 
       written_map->emplace(oid, std::move(to_write));
 
-      if (overwrite && entry) {
-        if (entry->written_shards.size() == sinfo.get_k_plus_m()) {
-          // More efficient to encode an empty set to mean all shards
+      if (entry) {
+	if (!rollback_extents.empty()) {
+	  entry->mod_desc.rollback_extents(
+	    entry->version.version,
+	    rollback_extents,
+	    ECUtil::align_page_next(plan.orig_size),
+	    rollback_shards);
+	}
+	if (entry->written_shards.size() == sinfo.get_k()) {
+          // More efficient to encode an empty set for all shards
           entry->written_shards.clear();
         }
         if (plan.hinfo)

@@ -4025,7 +4025,7 @@ public:
       const version_t gen,
       const std::vector<std::pair<uint64_t, uint64_t>> &extents,
       const uint64_t object_size,
-      const std::set<int> shards) {}
+      const std::vector<std::set<shard_id_t>> &shards) {}
     virtual ~Visitor() {}
   };
   void visit(Visitor *visitor) const;
@@ -4124,14 +4124,11 @@ public:
   }
   void rollback_extents(
    const version_t gen,
-   const uint64_t offset,
-   const uint64_t length,
+   const std::vector<std::pair<uint64_t, uint64_t>> &extents,
    const uint64_t object_size,
-   const std::set<int> &shards) {
+   const std::vector<std::set<shard_id_t>> &shards) {
     ceph_assert(can_local_rollback);
     ceph_assert(!rollback_info_completed);
-    std::vector<std::pair<uint64_t, uint64_t>> extents;
-    extents.emplace_back(std::make_pair(offset,length));
     if (max_required_version < 2)
       max_required_version = 2;
     ENCODE_START(3, 2, bl);
