@@ -36,18 +36,14 @@ namespace ECExtentCache {
     if (op->reads) {
       for (auto &&[shard, eset]: *(op->reads)) {
         extent_set request = eset;
-        dout(20) << "request= " << request << dendl;
         if (cache.contains(shard)) {
           request.subtract(cache.get_extent_set(shard));
-          dout(20) << "less_cache=" << request << dendl;
         }
         if (reading.contains(shard)) {
           request.subtract(reading.at(shard));
-          dout(20) << "less_reading=" << request << dendl;
         }
         if (writing.contains(shard)) {
           request.subtract(writing.at(shard));
-          dout(20) << "less_writing=" << request << dendl;
         }
 
         if (!request.empty()) {
@@ -60,7 +56,6 @@ namespace ECExtentCache {
     // We require that the overlapping reads and writes in the requested IO are either read
     // or were written by a previous IO.
     writing.insert(op->writes);
-    active_ios++;
 
     send_reads();
   }
@@ -91,8 +86,8 @@ namespace ECExtentCache {
     return cache.size() - old_size;
   }
 
-  void Object::unpin(OpRef &op) {
-    for ( auto &&l : op->lines) {
+  void Object::unpin(Op &op) {
+    for ( auto &&l : op.lines) {
       ceph_assert(l.ref_count);
       if (!--l.ref_count) {
         if (pg.lru_enabled) {
@@ -104,8 +99,6 @@ namespace ECExtentCache {
       }
     }
 
-    ceph_assert(active_ios > 0);
-    active_ios--;
     delete_maybe();
   }
 
@@ -171,7 +164,7 @@ namespace ECExtentCache {
     op->reads = to_read;
     op->writes = write;
     op->object.projected_size = op->projected_size = projected_size;
-    if (op->object.active_ios == 0)
+    if (op->object.active_ios == 1)
       op->object.current_size = orig_size;
 
     unlock();
@@ -207,15 +200,18 @@ namespace ECExtentCache {
     return objects.contains(oid);
   }
 
-  void PG::complete(OpRef &op) {
-    lock();
-    op->object.unpin(op);
-    ceph_assert(active_ios > 0);
-    active_ios--;
-    if (lru_enabled) {
-      lru.free_maybe();
+  Op::~Op() {
+    object.pg.lock();
+    ceph_assert(object.active_ios > 0);
+    object.active_ios--;
+    ceph_assert(object.pg.active_ios > 0);
+    object.pg.active_ios--;
+
+    object.unpin(*this);
+    if (object.pg.lru_enabled) {
+      object.pg.lru.free_maybe();
     }
-    unlock();
+    object.pg.unlock();
   }
 
   void PG::on_change() {
@@ -230,14 +226,13 @@ namespace ECExtentCache {
       op->cancel();
     }
     waiting_ops.clear();
-    objects.clear();
-    active_ios = 0;
+    ceph_assert(objects.empty());
+    ceph_assert(active_ios == 0);
   }
 
   void PG::execute(OpRef op) {
     lock();
     op->object.request(op);
-    active_ios++;
     waiting_ops.emplace_back(op);
     counter++;
     cumm_size += op->writes.size();
@@ -297,5 +292,12 @@ namespace ECExtentCache {
     eset.align(alignment);
 
     return eset;
+  }
+
+  Op::Op(GenContextURef<OpRef &> &&cache_ready_cb, Object &object) :
+  object(object), cache_ready_cb(std::move(cache_ready_cb))
+  {
+    object.active_ios++;
+    object.pg.active_ios++;
   }
 } // ECExtentCache

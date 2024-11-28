@@ -747,7 +747,7 @@ void ECCommon::RMWPipeline::start_rmw(OpRef op)
       {
         op->cache_ready(op->hoid, cache_op->get_result());
       });
-    op->cache_ops.emplace(op->hoid, cache_op);
+    op->cache_ops.emplace(op->hoid, std::move(cache_op));
   }
   for (auto &&[_, cache_op] : op->cache_ops) {
     extent_cache.execute(cache_op);
@@ -929,9 +929,6 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
   if (op->version > committed_to)
     committed_to = op->version;
 
-  for (auto &&[_, c]: op->cache_ops) {
-    extent_cache.complete(c);
-  }
   op->cache_ops.clear();
 
   if (get_osdmap()->require_osd_release >= ceph_release_t::kraken && extent_cache.idle()) {

@@ -65,7 +65,6 @@ namespace ECExtentCache {
     // Insert some data into the cache.
     void read_done(hobject_t const& oid, ECUtil::shard_extent_map_t const&& update);
     void write_done(OpRef &op, ECUtil::shard_extent_map_t const&& update);
-    void complete(OpRef &read);
     void on_change();
     bool contains_object(hobject_t const &oid);
     uint64_t get_projected_size(hobject_t const &oid);
@@ -128,8 +127,8 @@ namespace ECExtentCache {
     extent_set get_pin_eset(uint64_t alignment);
 
   public:
-    explicit Op(GenContextURef<OpRef &> &&cache_ready_cb, Object &object) :
-      object(object), cache_ready_cb(std::move(cache_ready_cb)) {}
+    explicit Op(GenContextURef<OpRef &> &&cache_ready_cb, Object &object);
+    ~Op();
     void cancel() { delete cache_ready_cb.release(); }
     std::optional<ECUtil::shard_extent_map_t> get_result() { return result; }
     ECUtil::shard_extent_set_t get_writes() { return writes; }
@@ -161,7 +160,7 @@ namespace ECExtentCache {
     void send_reads();
     uint64_t read_done(ECUtil::shard_extent_map_t const &result);
     uint64_t insert(ECUtil::shard_extent_map_t const &buffers);
-    void unpin(OpRef &op);
+    void unpin(Op &op);
     void delete_maybe();
     uint64_t erase_line(Line &l);
 
