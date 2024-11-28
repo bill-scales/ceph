@@ -805,7 +805,6 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
     oid_to_version[op.hoid] = op.version;
   }
   for (auto &&pg_shard : get_parent()->get_acting_recovery_backfill_shards()) {
-    op.pending_commits++;
     auto iter = trans.find(pg_shard.shard);
     ceph_assert(iter != trans.end());
     if (iter->second.empty()) {
@@ -826,7 +825,7 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
       dout(20) << " BILL: Skipping transaction for osd." << iter->first << dendl;
       continue;
     }
-    op.pending_commit.insert(pg_shard);
+    op.pending_commits++;
     bool should_send = get_parent()->should_send_op(pg_shard, op.hoid);
     const pg_stat_t &stats =
       (should_send || !backfill_shards.count(pg_shard)) ?
@@ -939,7 +938,7 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
     if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       int transactions_since_last_idle = extent_cache.get_and_reset_counter();
       uint64_t cumm_size = extent_cache.get_and_reset_cumm_size();
-      dout(20) << __func__ << " version=" << op->version << " ec_counter=" << transactions_since_last_idle << " size=" << cumm_size << dendl; dendl;
+      dout(20) << __func__ << " version=" << op->version << " ec_counter=" << transactions_since_last_idle << " size=" << cumm_size << dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
       auto tid = get_parent()->get_tid();
       auto nop = std::make_shared<ECDummyOp>();
