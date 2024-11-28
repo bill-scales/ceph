@@ -69,7 +69,6 @@ static void encode_and_write(
 
   for (auto &&[shard_id, t]: *transactions) {
     if (plan.will_write.contains(shard_id)) {
-      extent_map emap = shard_extent_map.get_extent_map(shard_id);
       extent_set to_write_eset = plan.will_write[shard_id];
       if (to_write_eset.begin().get_start() >= plan.orig_size) {
 	t.set_alloc_hint(
