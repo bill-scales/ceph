@@ -569,59 +569,79 @@ void ECTransaction::generate_transactions(
       if (!sinfo.supports_ec_optimizations()) {
         clone_max = sinfo.logical_to_next_stripe_offset(clone_max);
       }
-      uint64_t rollback_max = sinfo.logical_to_next_stripe_offset(clone_max);
-      clone_ranges.erase_after(rollback_max);
+      ECUtil::shard_extent_set_t cloneable_range;
+      sinfo.ro_size_to_read_mask (clone_max, cloneable_range);
+
+      set<int> touched;
+
       for (auto &[start, len] : clone_ranges) {
-	set<int> BILL_FIXME;
-	overwrite = true;
-	entry->mod_desc.rollback_extents(
-	  entry->version.version,
-	  start,
-	  len,
-	  ECUtil::align_page_next(plan.orig_size),
-	  BILL_FIXME);
+        set<int> to_clone_shards;
+        int clone_end = 0;
+
+        for (auto &&[shard, eset] : plan.will_write) {
+          entry->written_shards.insert(shard);
+
+          // If no clonable range here, then ignore.
+          if (!cloneable_range.contains(shard)) continue;
+
+          // Do not clone off the end of the old range
+          uint64_t shard_clone_max = cloneable_range.at(shard).range_end();
+          uint64_t shard_end = start + len;
+          if (shard_end > shard_clone_max) shard_end = shard_clone_max;
+
+          // clone_end needs to be the biggest shard_end.
+          if (shard_end > clone_end) clone_end = shard_end;
+
+          // Ignore pure appends on this shard.
+          if (shard_end <= start) continue;
+
+          shard_id_t shard_id(shard);
+
+          // Ignore clones that do not intersect with the write.
+          if (!eset.intersects(start, len)) continue;
+
+          // We need a clone...
+          auto &&t = (*transactions)[shard_id];
+
+          // Only touch once.
+          if (!touched.contains(shard)) {
+            t.touch(
+              coll_t(spg_t(pgid, shard_id)),
+              ghobject_t(oid, entry->version.version, shard_id));
+            touched.insert(shard);
+          }
+          t.clone_range(
+            coll_t(spg_t(pgid, shard_id)),
+            ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+            ghobject_t(oid, entry->version.version, shard_id),
+            start,
+            shard_end - start,
+            start);
+
+          // We have done a clone, so tell the rollback.
+          to_clone_shards.insert(shard);
+        }
+
+        // It is more efficent to store an empty set to represent the common
+        // all shards case.
+        if (to_clone_shards.size() == sinfo.get_k_plus_m()) {
+          to_clone_shards.clear();
+        }
+        if (clone_end > start) {
+          overwrite = true;
+          entry->mod_desc.rollback_extents(
+            entry->version.version,
+            start,
+            clone_end - start,
+            ECUtil::align_page_next(plan.orig_size),
+            to_clone_shards);
+        }
       }
 
       if (!to_write.empty()) {
         // Depending on the write, we may or may not have the parity buffers.
         // Here we invent some buffers.
-
         to_write.insert_parity_buffers();
-        debug(oid, "overwrite insert parity", to_write, dpp);
-
-        /* Generate the clone transactions for every shard. These are the same
-         * for each shard and cover complete chunks.
-         *
-         * This could probably be more efficient...
-         */
-        auto clone_region = plan.will_write.get_extent_superset();
-
-        ECUtil::shard_extent_set_t cloneable_range;
-        sinfo.ro_range_to_shard_extent_set_with_parity(0, clone_max, cloneable_range);
-
-        for (auto &&[shard, eset] : cloneable_range) {
-          eset.intersection_of(clone_ranges);
-          shard_id_t shard_id(shard);
-
-          auto &&t = (*transactions)[shard_id];
-
-          if (!eset.empty()) {
-            entry->written_shards.insert(shard);
-            t.touch(
-              coll_t(spg_t(pgid, shard_id)),
-              ghobject_t(oid, entry->version.version, shard_id));
-            for (auto &[start, len] : eset) {
-              t.clone_range(
-                coll_t(spg_t(pgid, shard_id)),
-                ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-                ghobject_t(oid, entry->version.version, shard_id),
-                start,
-                len,
-                start);
-            }
-          }
-        }
-
 	encode_and_write(pgid, oid, ecimpl, plan, to_write, fadvise_flags,
 	  transactions, dpp);
       }
@@ -629,7 +649,7 @@ void ECTransaction::generate_transactions(
       written_map->emplace(oid, std::move(to_write));
 
       if (overwrite && entry) {
-        if (entry->written_shards.size() == ecimpl->get_chunk_count()) {
+        if (entry->written_shards.size() == sinfo.get_k_plus_m()) {
           // More efficient to encode an empty set to mean all shards
           entry->written_shards.clear();
         }
