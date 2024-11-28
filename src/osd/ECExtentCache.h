@@ -85,7 +85,7 @@ namespace ECExtentCache {
     }
 
     void execute(OpRef op);
-    bool idle() const;
+    [[nodiscard]] bool idle() const;
     int get_and_reset_counter();
     uint64_t get_and_reset_cumm_size();
   };
@@ -98,13 +98,11 @@ namespace ECExtentCache {
     std::list<Line> lru;
     uint64_t max_size = 0;
     uint64_t size = 0;
-    ceph::mutex mutex = ceph::make_mutex("ECExtentCache::LRU");;
+    ceph::mutex mutex = ceph::make_mutex("ECExtentCache::LRU");
 
     void free_maybe();
     void free_to_size(uint64_t target_size);
     void discard();
-    void pin(OpRef &op, uint64_t alignment, Object &object);
-    std::map<hobject_t, std::list<uint64_t>> unpin(OpRef &op, uint64_t alignment);
     void inc_size(uint64_t size);
     void dec_size(uint64_t size);
   public:
@@ -123,7 +121,7 @@ namespace ECExtentCache {
     ECUtil::shard_extent_set_t writes;
     std::optional<ECUtil::shard_extent_map_t> result;
     bool complete = false;
-    uint64_t projected_size;
+    uint64_t projected_size = 0;
     GenContextURef<OpRef &> cache_ready_cb;
     std::list<Line> lines;
 
@@ -162,9 +160,6 @@ namespace ECExtentCache {
     void request(OpRef &op);
     void send_reads();
     uint64_t read_done(ECUtil::shard_extent_map_t const &result);
-    uint64_t write_done(OpRef &op, ECUtil::shard_extent_map_t const &result);
-    void check_buffers_pinned(ECUtil::shard_extent_map_t const &buffers);
-    void check_cache_pinned();
     uint64_t insert(ECUtil::shard_extent_map_t const &buffers);
     void unpin(OpRef &op);
     void delete_maybe();

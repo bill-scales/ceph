@@ -243,7 +243,7 @@ namespace ECExtentCache {
     cumm_size += op->writes.size();
     cache_maybe_ready();
     unlock();
-  };
+  }
 
   bool PG::idle() const
   {
