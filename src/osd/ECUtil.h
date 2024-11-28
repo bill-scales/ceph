@@ -192,7 +192,7 @@ public:
     uint64_t remainder = size % get_stripe_width();
     uint64_t shard_size = (size - remainder) / k;
     shard = chunk_mapping_reverse[shard];
-    if (shard > (int)get_data_chunk_count()) {
+    if (shard >= (int)get_data_chunk_count()) {
       // coding parity shards have same size as data shard 0
       shard = 0;
     }
@@ -379,6 +379,8 @@ public:
     extent_set parity;
     ro_range_to_shards(ro_offset, ro_size, &shard_extent_set, &parity, NULL,
                         NULL);
+
+    if (parity.empty()) return;
 
     for (int shard : get_parity_shards()) {
       shard_extent_set[shard].insert(parity);

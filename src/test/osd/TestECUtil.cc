@@ -715,3 +715,14 @@ TEST(ECUtil, slice_iterator)
   }
 
 }
+
+TEST(ECUtil, object_size_to_shard_size)
+{
+  stripe_info_t sinfo(4, 4*4096, 2);
+  ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 0));
+  ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 1));
+  ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 2));
+  ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 3));
+  ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 4));
+  ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 5));
+}
