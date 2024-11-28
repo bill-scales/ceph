@@ -624,7 +624,7 @@ void ECBackend::RecoveryBackend::continue_recovery_op(
       dout(20) << __func__ << ": returned_data=" << op.returned_data << dendl;
       op.state = RecoveryOp::WRITING;
       ObjectRecoveryProgress after_progress = op.recovery_progress;
-      after_progress.data_recovered_to += op.returned_data->get_ro_end();
+      after_progress.data_recovered_to = op.returned_data->get_ro_end();
       after_progress.first = false;
       if (after_progress.data_recovered_to >= op.obc->obs.oi.size) {
 	after_progress.data_complete = true;
