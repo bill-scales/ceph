@@ -57,7 +57,7 @@ namespace ECTransaction {
   void generate_transactions(
     PGTransaction* _t,
     WritePlan &plan,
-    ceph::ErasureCodeInterfaceRef &ecimpl,
+    ceph::ErasureCodeInterfaceRef &ec_impl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
     const std::map<hobject_t, ECUtil::shard_extent_map_t> &partial_extents,

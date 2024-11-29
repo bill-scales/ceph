@@ -604,7 +604,7 @@ struct ECCommon {
       }
 
       virtual void generate_transactions(
-        ceph::ErasureCodeInterfaceRef &ecimpl,
+        ceph::ErasureCodeInterfaceRef &ec_impl,
         pg_t pgid,
         const ECUtil::stripe_info_t &sinfo,
         std::map<hobject_t, ECUtil::shard_extent_map_t>* written,

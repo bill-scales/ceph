@@ -52,14 +52,14 @@ void debug(const hobject_t &oid, const std::string &str, const ECUtil::shard_ext
 static void encode_and_write(
   pg_t pgid,
   const hobject_t &oid,
-  ErasureCodeInterfaceRef &ecimpl,
+  ErasureCodeInterfaceRef &ec_impl,
   ECTransaction::WritePlanObj &plan,
   ECUtil::shard_extent_map_t &shard_extent_map,
   uint32_t flags,
   map<shard_id_t, ObjectStore::Transaction> *transactions,
   DoutPrefixProvider *dpp)
 {
-  int r = shard_extent_map.encode(ecimpl, plan.hinfo, plan.orig_size);
+  int r = shard_extent_map.encode(ec_impl, plan.hinfo, plan.orig_size);
   ceph_assert(r == 0);
 
   debug(oid, "parity", shard_extent_map, dpp);
@@ -174,7 +174,7 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
      */
     outter_extent_superset.align(sinfo.get_chunk_size());
     if (!outter_extent_superset.empty()) {
-      for (int raw_shard = 0; raw_shard < sinfo.get_k_plus_m(); raw_shard++) {
+      for (unsigned int raw_shard = 0; raw_shard < sinfo.get_k_plus_m(); raw_shard++) {
         int shard = sinfo.get_shard(raw_shard);
         will_write[shard].insert(outter_extent_superset);
         if (read_mask.contains(shard)) {
@@ -204,7 +204,7 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
         op.truncate->second - op.truncate->first, zero);
     }
 
-    for (int raw_shard = 0; raw_shard< sinfo.get_k_plus_m(); raw_shard++) {
+    for (unsigned int raw_shard = 0; raw_shard< sinfo.get_k_plus_m(); raw_shard++) {
       int shard = sinfo.get_shard(raw_shard);
       extent_set _to_read;
 
@@ -247,7 +247,7 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
 void ECTransaction::generate_transactions(
   PGTransaction *_t,
   WritePlan &plans,
-  ErasureCodeInterfaceRef &ecimpl,
+  ErasureCodeInterfaceRef &ec_impl,
   pg_t pgid,
   const ECUtil::stripe_info_t &sinfo,
   const map<hobject_t, ECUtil::shard_extent_map_t> &partial_extents,
@@ -641,7 +641,7 @@ void ECTransaction::generate_transactions(
         // Depending on the write, we may or may not have the parity buffers.
         // Here we invent some buffers.
         to_write.insert_parity_buffers();
-	encode_and_write(pgid, oid, ecimpl, plan, to_write, fadvise_flags,
+	encode_and_write(pgid, oid, ec_impl, plan, to_write, fadvise_flags,
 	  transactions, dpp);
       }
 
@@ -678,7 +678,7 @@ void ECTransaction::generate_transactions(
 	    ldpp_dout(dpp, 20) << "BILLOI: Full shard write, no prev shard versions -  version " << oi.version << dendl;
 	  }
 	} else {
-          for (unsigned int shard = 0; shard < ecimpl->get_chunk_count(); shard++) {
+          for (unsigned int shard = 0; shard < sinfo.get_k_plus_m(); shard++) {
 	    if (sinfo.is_nonprimary_shard(shard_id_t(shard))) {
               if (entry->is_written_shard(shard_id_t(shard))) {
 		// Written - erase per shard version

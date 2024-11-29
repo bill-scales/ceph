@@ -41,7 +41,7 @@ TEST(ectransaction, two_writes_separated_append)
   b.append_zero(2437120);
   op.buffer_updates.insert(669856, b.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{b, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 8192, 0);
+  ECUtil::stripe_info_t sinfo(2, 2, 8192);
   ECTransaction::WritePlanObj plan(
     op,    sinfo,
     0,
@@ -66,7 +66,7 @@ TEST(ectransaction, two_writes_separated_misaligned_overwrite)
   b.append_zero(2437120);
   op.buffer_updates.insert(669856, b.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{b, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 8192, 0, std::vector<int>(0));
+  ECUtil::stripe_info_t sinfo(2, 2, 8192, std::vector<int>(0));
   object_info_t oi;
   oi.size = 3112960;
 
@@ -97,7 +97,7 @@ TEST(ectransaction, partial_write)
   a.append_zero(8);
   op.buffer_updates.insert(0, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 8192, 1, std::vector<int>(0));
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
   object_info_t oi;
   oi.size = 8;
   ECTransaction::WritePlanObj plan(
@@ -130,7 +130,7 @@ TEST(ectransaction, overlapping_write_non_aligned)
   a.append_zero(8);
   op.buffer_updates.insert(0, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 8192, 1, std::vector<int>(0));
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
   object_info_t oi;
   oi.size = 8;
   ECTransaction::WritePlanObj plan(
@@ -164,7 +164,7 @@ TEST(ectransaction, test_appending_write_non_aligned)
   a.append_zero(4096);
   op.buffer_updates.insert(3*4096, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 8192, 1, std::vector<int>(0));
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
   object_info_t oi;
   oi.size = 4*4096;
   ECTransaction::WritePlanObj plan(

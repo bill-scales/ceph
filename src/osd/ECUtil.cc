@@ -388,7 +388,7 @@ namespace ECUtil {
      * e.g. appends will not provide parity buffers.
      * We should EITHER have no buffers, or have the right buffers.
      */
-    for (int i=sinfo->get_k(); i<sinfo->get_k_plus_m(); i++) {
+    for (unsigned int i=sinfo->get_k(); i<sinfo->get_k_plus_m(); i++) {
       int shard = sinfo->get_shard(i);
       for (auto &&[offset, length] : encode_set) {
         /* No need to recreate buffers we already have */
@@ -512,7 +512,7 @@ namespace ECUtil {
   /* Encode parity chunks, using the encode_chunks interface into the
    * erasure coding.  This generates all parity.
    */
-  int shard_extent_map_t::encode(ErasureCodeInterfaceRef& ecimpl,
+  int shard_extent_map_t::encode(ErasureCodeInterfaceRef& ec_impl,
     const HashInfoRef &hinfo,
     uint64_t before_ro_size) {
     std::set<int> shards;
@@ -528,13 +528,13 @@ namespace ECUtil {
         break;
       }
 
-      int r = ecimpl->encode_chunks_ptr(shards, iter.get_bufferptrs());
+      int r = ec_impl->encode_chunks_ptr(shards, iter.get_bufferptrs());
       if (r) return r;
     }
 
     if (rebuild_req) {
       pad_and_rebuild_to_page_align();
-      return encode(ecimpl, hinfo, before_ro_size);
+      return encode(ec_impl, hinfo, before_ro_size);
     }
 
     if (hinfo && ro_start >= before_ro_size) {
@@ -554,7 +554,7 @@ namespace ECUtil {
     return 0;
   }
 
-  int shard_extent_map_t::decode(ErasureCodeInterfaceRef& ecimpl,
+  int shard_extent_map_t::decode(ErasureCodeInterfaceRef& ec_impl,
     shard_extent_set_t want)
   {
     bool did_decode = false;
@@ -597,7 +597,7 @@ namespace ECUtil {
          * The chunk size passed in is only used in the clay encoding. It is
          * NOT the size of the decode.
          */
-        int r_i = ecimpl->decode(want_to_read, s, &decoded, sinfo->get_chunk_size());
+        int r_i = ec_impl->decode(want_to_read, s, &decoded, sinfo->get_chunk_size());
         if (r_i) {
           r = r_i;
           break;
@@ -868,7 +868,7 @@ void ECUtil::HashInfo::append(uint64_t old_size,
     ceph_assert(to_append.size() == cumulative_shard_hashes.size());
     for (auto &&[shard, ptr] : to_append) {
       ceph_assert(size_to_append == ptr.length());
-      ceph_assert(shard < cumulative_shard_hashes.size());
+      ceph_assert(shard < static_cast<int>(cumulative_shard_hashes.size()));
       cumulative_shard_hashes[shard] =
         ceph_crc32c(cumulative_shard_hashes[shard],
           (unsigned char*)ptr.c_str(), ptr.length());

@@ -117,10 +117,10 @@ namespace ECUtil {
   const uint64_t plugin_flags;
   const uint64_t chunk_size;
   const pg_pool_t *pool;
-  const int k; // Can be calculated with a division from above. Better to cache.
-  const int m;
+  const unsigned int k; // Can be calculated with a division from above. Better to cache.
+  const unsigned int m;
   const std::vector<int> chunk_mapping;
-  const std::vector<int> chunk_mapping_reverse;
+  const std::vector<unsigned int> chunk_mapping_reverse;
 private:
   void ro_range_to_shards(
     uint64_t ro_offset,
@@ -130,32 +130,38 @@ private:
     buffer::list *bl,
     shard_extent_map_t *shard_extent_map) const;
 
-  static std::vector<int> complete_chunk_mapping(std::vector<int> _chunk_mapping, int n)
+  static std::vector<int> complete_chunk_mapping(
+    std::vector<int> _chunk_mapping, unsigned int n)
   {
-    int size = (int)_chunk_mapping.size();
+    unsigned int size = (int)_chunk_mapping.size();
     std::vector<int> chunk_mapping(n);
-    for (int i = 0; i < n; i++) {
+    for (unsigned int i = 0; i < n; i++) {
       if (size > i) {
         chunk_mapping.at(i) = _chunk_mapping.at(i);
       } else {
-        chunk_mapping.at(i) = i;
+        chunk_mapping.at(i) = static_cast<int>(i);
       }
     }
     return chunk_mapping;
   }
-  static std::vector<int> reverse_chunk_mapping(std::vector<int> chunk_mapping)
+  static std::vector<unsigned int> reverse_chunk_mapping(
+    std::vector<int> chunk_mapping)
   {
-    int size = (int)chunk_mapping.size();
-    std::vector<int> reverse(size, -1);
-    for (int i = 0; i < size; i++) {
+    unsigned int size = (int)chunk_mapping.size();
+    std::vector<unsigned int> reverse(size);
+    std::vector<bool> used(size);
+    for (unsigned int i = 0; i < size; i++) {
+      int shard = chunk_mapping.at(i);
       // Mapping must be a bijection and a permutation
-      ceph_assert(reverse.at(chunk_mapping.at(i)) == -1);
-      reverse.at(chunk_mapping.at(i)) = i;
+      ceph_assert(!used.at(shard));
+      used.at(shard) = true;
+      reverse.at(shard) = i;
     }
     return reverse;
   }
 public:
-  stripe_info_t(ErasureCodeInterfaceRef ec_impl, const pg_pool_t *pool, uint64_t stripe_width)
+  stripe_info_t(ErasureCodeInterfaceRef ec_impl, const pg_pool_t *pool,
+		uint64_t stripe_width)
     : stripe_width(stripe_width),
       plugin_flags(ec_impl->get_supported_optimizations()),
       chunk_size(stripe_width / ec_impl->get_data_chunk_count()),
@@ -166,7 +172,8 @@ public:
       chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
     ceph_assert(stripe_width % k == 0);
   }
-  stripe_info_t(int k, uint64_t stripe_width, int m)
+    // Simpler constructors for unit tests
+  stripe_info_t(unsigned int k, unsigned int m, uint64_t stripe_width)
     : stripe_width(stripe_width),
       plugin_flags(0xFFFFFFFFFFFFFFFFul), // Everything enabled for test harnesses.
       chunk_size(stripe_width / k),
@@ -177,7 +184,8 @@ public:
       chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
     ceph_assert(stripe_width % k == 0);
   }
-  stripe_info_t(int k, uint64_t stripe_width, int m, std::vector<int> _chunk_mapping)
+  stripe_info_t(unsigned int k, unsigned int m, uint64_t stripe_width,
+		std::vector<int> _chunk_mapping)
     : stripe_width(stripe_width),
       plugin_flags(0xFFFFFFFFFFFFFFFFul), // Everything enabled for test harnesses.
       chunk_size(stripe_width / k),
@@ -186,18 +194,18 @@ public:
       m(m),
       chunk_mapping(complete_chunk_mapping(_chunk_mapping, k + m)),
       chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
-  ceph_assert(stripe_width % k == 0);
+    ceph_assert(stripe_width % k == 0);
   }
   uint64_t object_size_to_shard_size(const uint64_t size, int shard) const {
     uint64_t remainder = size % get_stripe_width();
     uint64_t shard_size = (size - remainder) / k;
-    shard = chunk_mapping_reverse[shard];
-    if (shard >= (int)get_data_chunk_count()) {
+    unsigned int raw_shard = get_raw_shard(shard);
+    if (raw_shard >= get_k()) {
       // coding parity shards have same size as data shard 0
-      shard = 0;
+      raw_shard = 0;
     }
-    if (remainder > shard * get_chunk_size()) {
-      remainder -= shard * get_chunk_size();
+    if (remainder > raw_shard * get_chunk_size()) {
+      remainder -= raw_shard * get_chunk_size();
       if (remainder > get_chunk_size()) {
 	remainder = get_chunk_size();
       }
@@ -248,22 +256,19 @@ public:
   uint64_t get_chunk_size() const {
     return chunk_size;
   }
-  int get_m() const {
+  unsigned int get_m() const {
     return m;
   }
-  int get_k() const {
+  unsigned int get_k() const {
     return k;
   }
-  int get_k_plus_m() const {
+  unsigned int get_k_plus_m() const {
     return k + m;
   }
-  std::vector<int> get_chunk_mapping() const {
-    return chunk_mapping;
-  }
-  int get_shard(int raw_shard) const {
+  int get_shard(unsigned int raw_shard) const {
     return chunk_mapping[raw_shard];
   }
-  int get_raw_shard(int shard) const
+  unsigned int get_raw_shard(int shard) const
   {
     return chunk_mapping_reverse.at(shard);
   }
@@ -515,7 +520,7 @@ public:
     uint64_t start = invalid_offset;
     uint64_t end = 0;
 
-    for (int raw_shard = 0; raw_shard < sinfo->get_data_chunk_count(); ++raw_shard) {
+    for (unsigned int raw_shard = 0; raw_shard < sinfo->get_k(); ++raw_shard) {
       int shard  = sinfo->get_shard(raw_shard);
       if (extent_maps.contains(shard)) {
         extent_set eset = extent_maps[shard].get_interval_set();
@@ -620,8 +625,8 @@ public:
   void append_zeros_to_ro_offset( uint64_t ro_offset );
   void insert_ro_extent_map(const extent_map &host_extent_map);
   extent_set get_extent_superset() const;
-  int encode(ErasureCodeInterfaceRef& ecimpl, const HashInfoRef &hinfo, uint64_t before_ro_size);
-  int decode(ErasureCodeInterfaceRef& ecimpl, ECUtil::shard_extent_set_t want);
+  int encode(ErasureCodeInterfaceRef& ec_impl, const HashInfoRef &hinfo, uint64_t before_ro_size);
+  int decode(ErasureCodeInterfaceRef& ec_impl, ECUtil::shard_extent_set_t want);
   void get_buffer(int shard, uint64_t offset, uint64_t length, buffer::list &append_to) const;
   void get_shard_first_buffer(int shard, buffer::list &append_to) const;
   uint64_t get_shard_first_offset(int shard) const;

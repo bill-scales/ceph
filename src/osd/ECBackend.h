@@ -306,9 +306,6 @@ public:
     pg_shard_t from,
     RecoveryMessages *m);
   friend struct RecoveryMessages;
-  int get_ec_data_chunk_count() const {
-    return ec_impl->get_data_chunk_count();
-  }
   void _failed_push(const hobject_t &hoid, ECCommon::read_result_t &res);
   };
   struct ECRecoveryBackend : RecoveryBackend {
@@ -380,8 +377,8 @@ public:
     return new ECRecPred(ec_impl);
   }
 
-  int get_ec_data_chunk_count() const override {
-    return ec_impl->get_data_chunk_count();
+  unsigned int get_ec_data_chunk_count() const override {
+    return sinfo.get_k();
   }
   int get_ec_stripe_chunk_size() const override {
     return sinfo.get_chunk_size();

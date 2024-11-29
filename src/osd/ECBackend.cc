@@ -192,10 +192,10 @@ void ECBackend::handle_recovery_push(
 {
   if (get_parent()->pg_is_remote_backfilling()) {
     get_parent()->pg_add_local_num_bytes(op.data.length());
-    get_parent()->pg_add_num_bytes(op.data.length() * get_ec_data_chunk_count());
+    get_parent()->pg_add_num_bytes(op.data.length() * sinfo.get_k());
     dout(10) << __func__ << " " << op.soid
              << " add new actual data by " << op.data.length()
-             << " add new num_bytes by " << op.data.length() * get_ec_data_chunk_count()
+             << " add new num_bytes by " << op.data.length() * sinfo.get_k()
              << dendl;
   }
 
@@ -210,10 +210,10 @@ void ECBackend::handle_recovery_push(
     if (r == 0) {
       get_parent()->pg_sub_local_num_bytes(st.st_size);
       // XXX: This can be way overestimated for small objects
-      get_parent()->pg_sub_num_bytes(st.st_size * get_ec_data_chunk_count());
+      get_parent()->pg_sub_num_bytes(st.st_size * sinfo.get_k());
       dout(10) << __func__ << " " << op.soid
                << " sub actual data by " << st.st_size
-               << " sub num_bytes by " << st.st_size * get_ec_data_chunk_count()
+               << " sub num_bytes by " << st.st_size * sinfo.get_k()
                << dendl;
     }
   }
@@ -362,7 +362,7 @@ void ECBackend::RecoveryBackend::handle_recovery_read_complete(
     }
 
     if (sinfo.require_hinfo()) {
-      ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
+      ECUtil::HashInfo hinfo(sinfo.get_k_plus_m());
       if (op.obc->obs.oi.size > 0) {
         ceph_assert(op.xattrs.count(ECUtil::get_hinfo_key()));
         auto bp = op.xattrs[ECUtil::get_hinfo_key()].cbegin();
@@ -984,8 +984,7 @@ void ECBackend::handle_sub_write(
     async);
 
   if (!get_parent()->pg_is_undersized() &&
-      (unsigned)get_parent()->whoami_shard().shard >=
-      ec_impl->get_data_chunk_count())
+      (unsigned)get_parent()->whoami_shard().shard >= sinfo.get_k())
     op.t.set_fadvise_flag(CEPH_OSD_OP_FLAG_FADVISE_DONTNEED);
 
   localt.register_on_commit(
@@ -1454,7 +1453,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
   PGTransactionUPtr t;
 
   void generate_transactions(
-    ceph::ErasureCodeInterfaceRef &ecimpl,
+    ceph::ErasureCodeInterfaceRef &ec_impl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
     map<hobject_t, ECUtil::shard_extent_map_t>* written,
@@ -1466,7 +1465,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
     ECTransaction::generate_transactions(
       t.get(),
       plan,
-      ecimpl,
+      ec_impl,
       pgid,
       sinfo,
       remote_shard_extent_map,

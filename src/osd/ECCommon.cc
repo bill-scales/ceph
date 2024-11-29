@@ -522,7 +522,7 @@ void ECCommon::ReadPipeline::get_want_to_read_shards(
   ECUtil::shard_extent_set_t &want_shard_reads)
 {
   if (sinfo.supports_partial_reads() && cct->_conf->osd_ec_partial_reads) {
-      //optimised.
+    // Optimised.
     for (const auto& single_region : to_read) {
       get_min_want_to_read_shards(single_region, want_shard_reads);
     }
@@ -530,13 +530,12 @@ void ECCommon::ReadPipeline::get_want_to_read_shards(
   }
 
   // Non-optimised version.
-  const std::vector<int> &chunk_mapping = ec_impl->get_chunk_mapping();
-  for (int i = 0; i < (int)ec_impl->get_data_chunk_count(); ++i) {
-    int chunk = (int)chunk_mapping.size() > i ? chunk_mapping[i] : i;
+  for (unsigned int raw_shard = 0; raw_shard < sinfo.get_k(); ++raw_shard) {
+    int shard = sinfo.get_shard(raw_shard);
 
     for (auto &&read : to_read) {
       auto offset_len = sinfo.chunk_aligned_offset_len_to_chunk(read.offset, read.size);
-      want_shard_reads[chunk].insert(offset_len.first, offset_len.second);
+      want_shard_reads[shard].insert(offset_len.first, offset_len.second);
     }
   }
 }
@@ -902,7 +901,7 @@ void ECCommon::RMWPipeline::cache_ready(Op &op)
 
 struct ECDummyOp : ECCommon::RMWPipeline::Op {
   void generate_transactions(
-    ceph::ErasureCodeInterfaceRef &ecimpl,
+    ceph::ErasureCodeInterfaceRef &ec_impl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
     map<hobject_t, ECUtil::shard_extent_map_t>* written,
