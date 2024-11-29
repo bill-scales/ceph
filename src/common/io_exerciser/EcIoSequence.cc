@@ -196,7 +196,8 @@ std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::ReadInjectSequence
 ceph::io_exerciser::Seq10::Seq10(std::pair<int,int> obj_size_range, int seed,
                                  int k, int m) :
   EcIoSequence(obj_size_range, seed), offset(0), length(1),
-  failed_write_done(false), read_done(false), successful_write_done(false),
+  inject_error_done(false), failed_write_done(false), read_done(false),
+  successful_write_done(false),
   test_all_lengths(false), // Only test length(1) due to time constraints
   test_all_sizes(false) // Only test obj_size(rand()) due to time constraints
 {
@@ -272,6 +273,7 @@ std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq10::_next()
     if (offset + length >= obj_size) {
       if (!test_all_lengths)
       {
+        remove = true;
         done = true;
         return BarrierOp::generate();
       }
@@ -281,6 +283,7 @@ std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq10::_next()
       if (length > obj_size) {
         if (!test_all_sizes)
         {
+          remove = true;
           done = true;
           return BarrierOp::generate();
         }
