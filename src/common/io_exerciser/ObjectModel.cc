@@ -57,7 +57,7 @@ void ObjectModel::applyIoOp(IoOp& op)
 {
   auto generate_random = [&rng = rng]()
   {
-    return rng();
+    return rng(1,std::numeric_limits<int>::max());
   };
 
   auto verify_and_record_read_op = [  &contents = contents,
