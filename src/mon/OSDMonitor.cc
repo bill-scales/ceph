@@ -8847,7 +8847,7 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
       // up to date copies of xattrs including OI
       p.nonprimary_shards.clear();
 // FIXME: BILL: Enable EC partial metadata writes
-#if 0
+#if 1
       p.nonprimary_shards.resize(total, true);
       for (unsigned int raw_shard = 0; raw_shard < k + m; raw_shard++) {
         shard_id_t shard;
