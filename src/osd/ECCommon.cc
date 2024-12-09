@@ -946,18 +946,20 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
       nop->pending_cache_ops = 1;
       nop->pipeline = this;
 
+      tid_to_op_map[tid] = nop;
+
       ECExtentCache::OpRef cache_op = extent_cache.prepare(op->hoid,
         std::nullopt,
         ECUtil::shard_extent_set_t(),
-        op->plan.plans.at(op->hoid).orig_size,
+        op->plan.plans.at(op->hoid).projected_size, // This op does not change any sizes.
         op->plan.plans.at(op->hoid).projected_size,
         [nop](ECExtentCache::OpRef cache_op)
         {
-          nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
           nop->cache_ready(nop->hoid, std::nullopt);
         });
 
-      tid_to_op_map[tid] = std::move(nop);
+      nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
+      extent_cache.execute(nop->cache_ops[nop->hoid]);
     }
   }
 
