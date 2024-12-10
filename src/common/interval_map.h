@@ -279,6 +279,18 @@ public:
       K len) const {
     return const_iterator(get_range_fst(off, len));
   }
+  K get_start_off() const
+  {
+    auto i = m.begin();
+    ceph_assert(i != m.end());
+    return i->first;
+  }
+  K get_end_off() const
+  {
+    auto i = m.rbegin();
+    ceph_assert(i != m.rend());
+    return i->first + i->second.first;
+  }
   bool contains(K off, K len) const {
     auto it = get_range_fst(off, len);
     if (it == m.end()) return false;

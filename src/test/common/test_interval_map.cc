@@ -350,3 +350,25 @@ TYPED_TEST(IntervalMapTest, contains) {
   ASSERT_FALSE(m.begin().contains(8,3));
   ASSERT_FALSE(m.begin().contains(13,2));
 }
+
+TYPED_TEST(IntervalMapTest, get_start_end_off)
+{
+  USING_NO_MERGE;
+  imap m;
+
+  m.insert(0, 5, gen(5));
+  ASSERT_EQ(0, m.get_start_off());
+  ASSERT_EQ(5, m.get_end_off());
+
+  m.insert(5, 5, gen(5));
+  ASSERT_EQ(0, m.get_start_off());
+  ASSERT_EQ(10, m.get_end_off());
+
+  m.erase(0,5);
+  ASSERT_EQ(5, m.get_start_off());
+  ASSERT_EQ(10, m.get_end_off());
+
+  m.insert(20,5, gen(5));
+  ASSERT_EQ(5, m.get_start_off());
+  ASSERT_EQ(25, m.get_end_off());
+}
