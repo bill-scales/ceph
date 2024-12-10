@@ -563,7 +563,7 @@ public:
     compute_ro_range();
   }
 
-  bool empty() {
+  bool empty() const {
     return ro_end == invalid_offset;
   }
 

@@ -617,10 +617,10 @@ struct ECCommon {
         shard_id_t shard,
         ceph::os::Transaction& transaction) = 0;
 
-      void cache_ready(hobject_t& oid, const std::optional<ECUtil::shard_extent_map_t>& result)
+      void cache_ready(hobject_t& oid, const ECUtil::shard_extent_map_t &result)
       {
-        if (result) {
-          remote_shard_extent_map.insert(std::pair(oid, *result));
+        if (!result.empty()) {
+          remote_shard_extent_map.insert(std::pair(oid, result));
         }
 
         if (!--pending_cache_ops) pipeline->cache_ready(*this);
@@ -693,7 +693,7 @@ struct ECCommon {
     const ECUtil::stripe_info_t& sinfo;
     ECListener* parent;
     ECCommon& ec_backend;
-    ECExtentCache::PG extent_cache;
+    ECExtentCache extent_cache;
 
     RMWPipeline(CephContext* cct,
                 ceph::ErasureCodeInterfaceRef ec_impl,
