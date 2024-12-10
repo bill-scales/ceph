@@ -236,6 +236,8 @@ namespace ECUtil {
   shard_extent_map_t shard_extent_map_t::intersect(shard_extent_set_t const &other) const
   {
     shard_extent_map_t out(sinfo);
+    out.ro_end = 0;
+    out.end_offset = 0;
 
     for (auto && [shard, this_eset] : other) {
       if (extent_maps.contains(shard)) {
@@ -249,30 +251,45 @@ namespace ECUtil {
           tmp.insert(offset, len, bl);
         }
         if (!tmp.empty()) {
+          uint64_t range_start = tmp.get_start_off();
+          uint64_t range_end = tmp.get_end_off();
+
+          out.start_offset = min(out.start_offset, range_start);
+          out.end_offset = max(out.end_offset, range_end);
+
+          int raw_shard = sinfo->get_raw_shard(shard);
+          if (raw_shard < sinfo->get_k()) {
+            out.ro_start = std::min(out.ro_start, calc_ro_offset(raw_shard, range_start));
+            out.ro_end = std::max(out.ro_end, calc_ro_end(raw_shard, range_end));
+          }
+
           out.extent_maps.emplace(shard, std::move(tmp));
         }
       }
     }
 
-    // This is a fairly inefficient function, so there might be a better way
-    // of keeping track here. However, any solution has to cope with holes
-    // in the interval map around the start/end of the intersection range.
-    out.compute_ro_range();
+    if (out.ro_start == invalid_offset) {
+      out.ro_end = out.end_offset = invalid_offset;
+    }
 
     return out;
   }
 
   void shard_extent_map_t::insert(shard_extent_map_t const &other)
   {
-    for (auto && [shard, eset] : other.extent_maps)
+    for (auto && [shard, emap] : other.extent_maps)
     {
-      extent_maps[shard].insert(eset);
+      extent_maps[shard].insert(emap);
     }
 
     if (ro_start == invalid_offset || other.ro_start < ro_start)
       ro_start = other.ro_start;
     if (ro_end == invalid_offset || other.ro_end > ro_end)
       ro_end = other.ro_end;
+    if (start_offset == invalid_offset || other.start_offset < start_offset)
+      start_offset = other.start_offset;
+    if (end_offset == invalid_offset || other.end_offset > end_offset)
+      end_offset = other.end_offset;
   }
 
   uint64_t shard_extent_map_t::size()
@@ -287,7 +304,7 @@ namespace ECUtil {
   }
 
   void shard_extent_map_t::clear() {
-    ro_start = ro_end = invalid_offset;
+    ro_start = ro_end = start_offset = end_offset = invalid_offset;
     extent_maps.clear();
   }
 
@@ -303,11 +320,18 @@ namespace ECUtil {
 
     extent_maps[shard].insert(off, bl.length(), bl);
     uint64_t new_start = calc_ro_offset(sinfo->get_raw_shard(shard), off);
-    uint64_t new_end = calc_ro_offset(sinfo->get_raw_shard(shard), off + bl.length() - 1) + 1;
-    if (empty() || new_start < ro_start)
+    uint64_t new_end = calc_ro_end(sinfo->get_raw_shard(shard), off + bl.length());
+    if (empty()) {
       ro_start = new_start;
-    if (empty() || new_end > ro_end )
       ro_end = new_end;
+      start_offset = off;
+      end_offset = off + bl.length();
+    } else {
+      ro_start = min(ro_start, new_start);
+      ro_end = max(ro_end, new_end);
+      start_offset = min(start_offset, off);
+      end_offset = max(end_offset, off + bl.length());
+    }
   }
 
   /* Insert a buffer for a particular shard.
@@ -321,10 +345,17 @@ namespace ECUtil {
       return;
 
     extent_maps[shard].insert(off, bl.length(), bl);
-    if (empty() || new_start < ro_start)
+    if (empty()) {
       ro_start = new_start;
-    if (empty() || new_end > ro_end )
       ro_end = new_end;
+      start_offset = off;
+      end_offset = off + bl.length();
+    } else {
+      ro_start = min(ro_start, new_start);
+      ro_end = max(ro_end, new_end);
+      start_offset = min(start_offset, off);
+      end_offset = max(end_offset, off + bl.length());
+    }
   }
 
   /* Insert a region of zeros in rados object address space..
@@ -658,6 +689,38 @@ namespace ECUtil {
         shard_bl.rebuild_aligned_size_and_memory(length, SIMD_ALIGN);
         slice.emplace(shard, std::move(shard_bl));
       }
+    }
+
+    return slice;
+  }
+
+  shard_extent_map_t shard_extent_map_t::slice_map(int offset, int length) const
+  {
+    // Range entirely contains offset - this will be common for small IO.
+    if (offset <= start_offset && offset + length >= end_offset) return *this;
+
+    shard_extent_map_t slice(sinfo);
+
+    // Null cases just generate an empty map.
+    if (offset >= end_offset) return slice;
+    if (offset + length <= start_offset) return slice;
+
+    slice.end_offset = slice.ro_end = 0;
+
+    for (auto &&[shard, emap]: extent_maps) {
+      extent_map iemap = emap.intersect(offset, length);
+
+      if (!iemap.empty()) {
+        slice.start_offset = min(slice.start_offset, iemap.get_start_off());
+        slice.end_offset = max(slice.start_offset, iemap.get_end_off());
+        slice.ro_start = min(slice.start_offset, calc_ro_offset(sinfo->get_raw_shard(shard), iemap.get_start_off()));
+        slice.ro_end = min(slice.ro_end, calc_ro_end(sinfo->get_raw_shard(shard), iemap.get_end_off()));
+        slice.extent_maps.emplace(shard, iemap);
+      }
+    }
+
+    if (slice.end_offset == 0) {
+      slice.end_offset = slice.ro_end = invalid_offset;
     }
 
     return slice;

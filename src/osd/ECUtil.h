@@ -501,15 +501,21 @@ public:
   // The maximal range of all extents maps within rados object space.
   uint64_t ro_start;
   uint64_t ro_end;
+  uint64_t start_offset;
+  uint64_t end_offset;
   std::map<int, extent_map> extent_maps;
 
   slice_iterator begin_slice_iterator();
 
   /* This caculates the ro offset for an offset into a particular shard */
-  uint64_t calc_ro_offset(int raw_shard, int shard_offset) {
+  uint64_t calc_ro_offset(int raw_shard, int shard_offset) const {
     int stripes = shard_offset / sinfo->chunk_size;
     return stripes * sinfo->stripe_width + raw_shard * sinfo->chunk_size +
       shard_offset % sinfo->chunk_size;
+  }
+
+  uint64_t calc_ro_end(int raw_shard, int shard_offset) const {
+    return calc_ro_offset(raw_shard, shard_offset - 1) + 1;
   }
 
   /* This is a relatively expensive operation to update the ro offset/length.
@@ -519,24 +525,29 @@ public:
   {
     uint64_t start = invalid_offset;
     uint64_t end = 0;
+    uint64_t o_start = invalid_offset;
+    uint64_t o_end = 0;
 
-    for (unsigned int raw_shard = 0; raw_shard < sinfo->get_k(); ++raw_shard) {
-      int shard  = sinfo->get_shard(raw_shard);
-      if (extent_maps.contains(shard)) {
-        extent_set eset = extent_maps[shard].get_interval_set();
-        uint64_t start_iter = calc_ro_offset(raw_shard, eset.range_start());
-        if (start_iter < start)
-          start = start_iter;
+    for (auto &&[shard, emap] : extent_maps) {
+      int raw_shard = sinfo->get_raw_shard(shard);
+      uint64_t start_off = emap.get_start_off();
+      uint64_t end_off = emap.get_end_off();
+      o_start = std::min(o_start, start_off);
+      o_end = std::max(o_end, end_off);
 
-        uint64_t end_iter = calc_ro_offset(raw_shard, eset.range_end()-1)+1;
-        if (end_iter > end)
-          end = end_iter;
+      if (raw_shard < sinfo->get_k()) {
+        start = std::min(start, calc_ro_offset(raw_shard, start_off));
+        end = std::max(end, calc_ro_end(raw_shard, end_off));
       }
     }
     if (end != 0) {
       ro_start = start;
       ro_end = end;
+      start_offset = o_start;
+      end_offset = o_end;
     } else {
+      ro_start = invalid_offset;
+      ro_end = invalid_offset;
       ro_start = invalid_offset;
       ro_end = invalid_offset;
     }
@@ -545,7 +556,9 @@ public:
   shard_extent_map_t(const stripe_info_t *sinfo) :
     sinfo(sinfo),
     ro_start(invalid_offset),
-    ro_end(invalid_offset)
+    ro_end(invalid_offset),
+    start_offset(invalid_offset),
+    end_offset(invalid_offset)
   {}
 
   shard_extent_map_t(const stripe_info_t *sinfo, std::map<int, extent_map> &&extent_maps) :
@@ -640,6 +653,7 @@ public:
   void insert_parity_buffers();
   void erase_shard(int shard);
   std::map<int, bufferlist> slice(int offset, int length) const;
+  shard_extent_map_t slice_map(int offset, int length) const;
   std::string debug_string(uint64_t inteval, uint64_t offset) const;
   void erase_stripe(uint64_t offset, uint64_t length);
   bool contains(int shard) const;
@@ -649,6 +663,8 @@ public:
   void pad_and_rebuild_to_page_align();
   uint64_t size();
   void clear();
+  uint64_t get_start_offset() const { return start_offset; }
+  uint64_t get_end_offset() const { return end_offset; }
 
   void assert_buffer_contents_equal(shard_extent_map_t other) const
   {

@@ -83,6 +83,9 @@ TEST(ECUtil, shard_extent_map_t)
     ASSERT_TRUE(semap.empty());
     ASSERT_EQ(std::numeric_limits<uint64_t>::max(), semap.get_ro_start());
     ASSERT_EQ(std::numeric_limits<uint64_t>::max(), semap.get_ro_end());
+    ASSERT_EQ(std::numeric_limits<uint64_t>::max(), semap.get_start_offset());
+    ASSERT_EQ(std::numeric_limits<uint64_t>::max(), semap.get_end_offset());
+
 
     // Insert a 1k buffer in shard 2
     buffer::list bl;
@@ -95,6 +98,8 @@ TEST(ECUtil, shard_extent_map_t)
     ASSERT_FALSE(semap.empty());
     ASSERT_EQ(shard2 * chunk_size + new_off, semap.get_ro_start());
     ASSERT_EQ(shard2 * chunk_size + new_off + new_len, semap.get_ro_end());
+    ASSERT_EQ(new_off, semap.get_start_offset());
+    ASSERT_EQ(new_off + bl.length(), semap.get_end_offset());
     auto iter = semap.get_extent_map(shard2).begin();
     ASSERT_EQ(new_off, iter.get_off());
     ASSERT_EQ(new_len, iter.get_len());
@@ -110,6 +115,8 @@ TEST(ECUtil, shard_extent_map_t)
     ASSERT_FALSE(semap.empty());
     ASSERT_EQ(shard0 * chunk_size + new_off, semap.get_ro_start());
     ASSERT_EQ(shard2 * chunk_size + new_off + new_len, semap.get_ro_end());
+    ASSERT_EQ(new_off, semap.get_start_offset());
+    ASSERT_EQ(new_off + bl.length(), semap.get_end_offset());
     iter = semap.get_extent_map(shard0).begin();
     ASSERT_EQ(new_off, iter.get_off());
     ASSERT_EQ(new_len, iter.get_len());
@@ -125,6 +132,8 @@ TEST(ECUtil, shard_extent_map_t)
     semap.insert_in_shard(shard2, chunk_size - 512, bl);
     ASSERT_EQ(shard0 * chunk_size + new_off, semap.get_ro_start());
     ASSERT_EQ((shard2 + k) * chunk_size + 512, semap.get_ro_end());
+    ASSERT_EQ(new_off, semap.get_start_offset());
+    ASSERT_EQ(chunk_size - 512 + bl.length(), semap.get_end_offset());
 
     iter = semap.get_extent_map(shard2).begin();
     ASSERT_EQ(new_off, iter.get_off());
@@ -192,6 +201,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(emap.get_start_off(), semap.get_ro_start());
+    ASSERT_EQ(emap.get_end_off(), semap.get_ro_end());
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(chunk_size * 16, semap.get_end_offset());
 
     /* Erase the later parts at an obscure offset. */
     semap.erase_after_ro_offset(chunk_size * k * 8 + 2 * chunk_size + 512);
@@ -212,7 +225,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(5, semap.get_ro_start());
     ASSERT_EQ(chunk_size * k * 8 + 2 * chunk_size + 512, semap.get_ro_end());
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(33280, semap.get_end_offset());
 
     /* Append again */
     semap.append_zeros_to_ro_offset(chunk_size * k * 9 + 2 * chunk_size + 512);
@@ -225,7 +241,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(5, semap.get_ro_start());
     ASSERT_EQ(chunk_size * k * 9 + 2 * chunk_size + 512, semap.get_ro_end());
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(chunk_size * 10, semap.get_end_offset());
 
     /* Append nothing */
     semap.append_zeros_to_ro_offset(chunk_size * k * 9 + 2 * chunk_size + 512);
@@ -233,7 +252,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(5, semap.get_ro_start());
     ASSERT_EQ(chunk_size * k * 9 + 2 * chunk_size + 512, semap.get_ro_end());
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(chunk_size * 10, semap.get_end_offset());
 
     /* Append, to an offset before the end */
     semap.append_zeros_to_ro_offset(chunk_size * k * 8 + 2 * chunk_size + 512);
@@ -241,7 +263,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(5, semap.get_ro_start());
     ASSERT_EQ(chunk_size * k * 9 + 2 * chunk_size + 512, semap.get_ro_end());
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(chunk_size * 10, semap.get_end_offset());
 
     /* Intersect the beginning ro range */
     shard_extent_map_t semap2 = semap.intersect_ro_range(chunk_size * 2 - 256,
@@ -252,8 +277,10 @@ TEST(ECUtil, shard_extent_map_t)
       ASSERT_EQ(eset, semap.get_extent_map(shard).get_interval_set())
         << "shard=" << shard;
     }
+    ASSERT_EQ(5, semap.get_ro_start());
     ASSERT_EQ(chunk_size * k * 9 + 2 * chunk_size + 512, semap.get_ro_end());
-
+    ASSERT_EQ(0, semap.get_start_offset());
+    ASSERT_EQ(chunk_size * 10, semap.get_end_offset());
     {
       extent_set tmp;
       tmp.insert(chunk_size, chunk_size * 8);
@@ -278,6 +305,8 @@ TEST(ECUtil, shard_extent_map_t)
     ASSERT_EQ(chunk_size*2 - 256, semap2.get_ro_start());
     ASSERT_EQ(chunk_size * (k * 5 + 2), semap2.get_ro_end())
       << "semap2=" << semap2;
+    ASSERT_EQ(0, semap2.get_start_offset());
+    ASSERT_EQ(chunk_size * 6, semap2.get_end_offset());
 
     // intersect with somethning bigger and it should be identical
     semap2 = semap2.intersect_ro_range(0, chunk_size * k * 10);
@@ -287,6 +316,8 @@ TEST(ECUtil, shard_extent_map_t)
     }
     ASSERT_EQ(chunk_size * 2 - 256, semap2.get_ro_start());
     ASSERT_EQ(chunk_size * (k * 5 + 2), semap2.get_ro_end());
+    ASSERT_EQ(0, semap2.get_start_offset());
+    ASSERT_EQ(chunk_size * 6, semap2.get_end_offset());
 
     extent_set superset;
     for (auto &&[_, eset] : ref)
@@ -329,6 +360,8 @@ TEST(ECUtil, shard_extent_map_t_scenario_1)
   ASSERT_FALSE(semap.contains_shard(3));
   ASSERT_EQ(2*chunk_size, semap.get_ro_start());
   ASSERT_EQ(8*chunk_size, semap.get_ro_end());
+  ASSERT_EQ(chunk_size, semap.get_start_offset());
+  ASSERT_EQ(4*chunk_size, semap.get_end_offset());
 
   bufferlist bl2;
   bl2.append_zero(2048);
@@ -355,6 +388,8 @@ TEST(ECUtil, shard_extent_map_t_scenario_1)
   ASSERT_FALSE(semap.contains_shard(3));
   ASSERT_EQ(2*chunk_size, semap.get_ro_start());
   ASSERT_EQ(8*chunk_size, semap.get_ro_end());
+  ASSERT_EQ(chunk_size, semap.get_start_offset());
+  ASSERT_EQ(4*chunk_size, semap.get_end_offset());
 
 
   shard_extent_map_t semap2 = semap.intersect_ro_range(0, 8*chunk_size);
@@ -725,4 +760,85 @@ TEST(ECUtil, object_size_to_shard_size)
   ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 3));
   ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 4));
   ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 5));
+}
+
+TEST(ECUtil, slice)
+{
+  int k=4;
+  int m=2;
+  int chunk_size = 4096;
+  stripe_info_t sinfo(k, k*4096, m);
+  shard_extent_map_t sem(&sinfo);
+
+  extent_map emap;
+  buffer::list bl1k;
+  buffer::list bl4k;
+  buffer::list bl16k;
+  buffer::list bl64k;
+
+  bl1k.append_zero(1024);
+  bl4k.append_zero(4096);
+  bl16k.append_zero(chunk_size * k);
+  bl64k.append_zero(chunk_size * k * 4);
+  shard_extent_set_t ref;
+
+  sem.insert_in_shard(1, 512, bl1k);
+  sem.insert_in_shard(2, 5, bl4k);
+  sem.insert_in_shard(3, 256, bl16k);
+  sem.insert_in_shard(4, 5, bl64k);
+
+  {
+    auto slice = sem.slice(512, 1024);
+    ASSERT_EQ(4, slice.size());
+    for (int i=1; i<5; i++) {
+      ASSERT_EQ(1024, slice[i].length());
+    }
+  }
+
+  {
+    auto slice_map = sem.slice_map(512, 1024);
+    ASSERT_EQ(4, slice_map.get_extent_maps().size());
+    ASSERT_EQ(512, slice_map.get_start_offset());
+    ASSERT_EQ(512+1024, slice_map.get_end_offset());
+
+    for (int i=1; i<5; i++) {
+      ASSERT_EQ(512, slice_map.get_extent_map(i).get_start_off());
+      ASSERT_EQ(512+1024, slice_map.get_extent_map(i).get_end_off());
+    }
+  }
+
+  {
+    auto slice_map = sem.slice_map(0, 4096);
+    ASSERT_EQ(4, slice_map.get_extent_maps().size());
+    ASSERT_EQ(5, slice_map.get_start_offset());
+    ASSERT_EQ(4096, slice_map.get_end_offset());
+    ASSERT_EQ(512, slice_map.get_extent_map(1).get_start_off());
+    ASSERT_EQ(512 + 1024, slice_map.get_extent_map(1).get_end_off());
+    ASSERT_EQ(5, slice_map.get_extent_map(2).get_start_off());
+    ASSERT_EQ(4096, slice_map.get_extent_map(2).get_end_off());
+    ASSERT_EQ(256, slice_map.get_extent_map(3).get_start_off());
+    ASSERT_EQ(4096, slice_map.get_extent_map(3).get_end_off());
+    ASSERT_EQ(5, slice_map.get_extent_map(4).get_start_off());
+    ASSERT_EQ(4096, slice_map.get_extent_map(4).get_end_off());
+  }
+
+  {
+    auto slice_map = sem.slice_map(0, 5);
+    ASSERT_TRUE(slice_map.empty());
+  }
+
+  {
+    auto slice_map = sem.slice_map(64*1024+5, 5);
+    ASSERT_TRUE(slice_map.empty());
+  }
+
+  {
+    auto slice_map = sem.slice_map(5, 64*1024);
+    ASSERT_EQ(slice_map, sem);
+  }
+
+  {
+    auto slice_map = sem.slice_map(0, 65*1024);
+    ASSERT_EQ(slice_map, sem);
+  }
 }
