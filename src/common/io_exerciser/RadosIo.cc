@@ -156,6 +156,23 @@ void RadosIo::applyIoOp(IoOp& op)
     break;
   }
 
+  case OpType::Truncate:
+  {
+    start_io();
+    uint64_t opSize = static_cast<TruncateOp&>(op).size;
+    auto op_info = std::make_shared<AsyncOpInfo<0>>();
+    op_info->wop.truncate(opSize * block_size);
+    auto truncate_cb = [this](boost::system::error_code ec,
+                             version_t ver)
+    {
+      ceph_assert(ec == boost::system::errc::success);
+      finish_io();
+    };
+    librados::async_operate(asio, io, oid,
+                            &op_info->wop, 0, nullptr, truncate_cb);
+    break;
+  }
+
   case OpType::Remove:
   {
     start_io();
