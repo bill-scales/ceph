@@ -352,6 +352,16 @@ bool PeeringState::proc_replica_notify(const pg_shard_t &from, const pg_notify_t
         psdout(0) << "BILLPROCREPINFO osd." << from << " setting shard " << shard << " to " << version << dendl;
 	info.partial_writes_last_complete[shard] = version;
       }
+      auto other = peer_info.find(pg_shard_t(acting[shard],shard_id_t(shard)));
+      if (other != peer_info.end()) {
+	if (version > other->second.last_complete) {
+	  psdout(0) << "BILLPROCREPINFO2 osd." << other->first << " has last_complete " << other->second.last_complete << " but partial_write_last_complete says its at " << version << dendl;
+	  other->second.last_complete = version;
+	}
+	if (version > other->second.last_update) {
+	  other->second.last_update = version;
+	}
+      }
     }
   }
   if (info.partial_writes_last_complete.contains(from.shard)) {
@@ -3098,6 +3108,21 @@ void PeeringState::proc_master_log(
   psdout(10) << "proc_master_log for osd." << from << ": "
 	     << olog << " " << omissing << dendl;
   ceph_assert(!is_peered() && is_primary());
+
+  if (info.partial_writes_last_complete.contains(from.shard)) {
+    // Check if last_complete and last_update can be advanced based on knowledge of partial_writes
+    const auto version = info.partial_writes_last_complete[from.shard];
+    if (version > oinfo.last_complete) {
+      psdout(0) << "BILLPROCMASTERLOG osd." << from << " has last_complete " << oinfo.last_complete << " but partial_write_last_complete says its at " << version << dendl;
+      oinfo.last_complete = version;
+    }
+    if (version > oinfo.last_update) {
+      oinfo.last_update = version;
+    }
+    if (version > olog.head) {
+      olog.head = version;
+    }
+  }
 
   // merge log into our own log to build master log.  no need to
   // make any adjustments to their missing map; we are taking their
