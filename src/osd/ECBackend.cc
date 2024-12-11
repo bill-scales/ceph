@@ -1484,7 +1484,7 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       ceph::os::Transaction& transaction) final
   {
 // FIXME: BILL: Enable EC partial metadata writes
-#if 1
+#if 0
     if (transaction.empty()) {
       return true;
     }
