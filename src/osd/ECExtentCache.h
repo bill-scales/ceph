@@ -11,6 +11,7 @@ class ECExtentCache {
   class Address;
   class Line;
   class Object;
+  typedef std::shared_ptr<Line> LineRef;
 public:
   class LRU;
   class Op;
@@ -22,7 +23,7 @@ public:
 
 public:
   class LRU {
-    std::list<Line> lru;
+    std::list<LineRef> lru;
     uint64_t max_size = 0;
     uint64_t size = 0;
     ceph::mutex mutex = ceph::make_mutex("ECExtentCache::LRU");
@@ -39,16 +40,17 @@ public:
   class Op
   {
     friend class Object;
+    friend class ECExtentCache;
 
     Object &object;
-    std::optional<ECUtil::shard_extent_set_t> reads;
-    ECUtil::shard_extent_set_t writes;
+    std::optional<ECUtil::shard_extent_set_t> const reads;
+    ECUtil::shard_extent_set_t const writes;
     bool complete = false;
     uint64_t projected_size = 0;
     GenContextURef<ECUtil::shard_extent_map_t &> cache_ready_cb;
-    std::list<Line> lines;
+    std::list<LineRef> lines;
 
-    extent_set get_pin_eset(uint64_t alignment) const;
+    [[nodiscard]] extent_set get_pin_eset(uint64_t alignment) const;
 
   public:
     explicit Op(
@@ -58,14 +60,24 @@ public:
       ECUtil::shard_extent_set_t const &write,
       uint64_t orig_size,
       uint64_t projected_size);
+      bool reading = false;
+      bool read_done = false;
     ~Op();
     void cancel() { delete cache_ready_cb.release(); }
     ECUtil::shard_extent_set_t get_writes() { return writes; }
-    Object &get_object() const { return object; }
+    [[nodiscard]] Object &get_object() const { return object; }
+
     bool complete_if_reads_cached()
     {
-      if (!object.cache.contains(reads)) return false;
-      auto result = object.cache.intersect(reads);
+      if (!read_done) return false;
+      auto result = object.get_cache(reads);
+
+      //FIXME: This assert is likely a performance issue!
+      if (reads) {
+        ceph_assert(*reads == result.get_shard_extent_set());
+      } else {
+        ceph_assert(result.empty());
+      }
       complete = true;
         cache_ready_cb.release()->complete(result);
       return true;
@@ -73,46 +85,52 @@ public:
 
     void write_done(ECUtil::shard_extent_map_t const&& update) const
     {
-      object.insert(update);
-      object.current_size = projected_size;
-    }
-
-    void request()
-    {
-      object.request(*this);
+      object.write_done(update, projected_size);
     }
   };
+
+#define MIN_LINE_SIZE (32UL*1024UL)
 
 private:
   class Object
   {
     friend class Op;
     friend class LRU;
+    friend class Line;
+    friend class ECExtentCache;
 
     ECExtentCache &pg;
     ECUtil::stripe_info_t const &sinfo;
     ECUtil::shard_extent_set_t requesting;
     ECUtil::shard_extent_set_t reading;
     ECUtil::shard_extent_set_t writing;
-    ECUtil::shard_extent_map_t cache;
-    std::map<uint64_t, Line> lines;
+    std::list<OpRef> reading_ops;
+    std::list<OpRef> requesting_ops;
+    std::map<uint64_t, LineRef> lines;
     int active_ios = 0;
     uint64_t projected_size = 0;
     uint64_t current_size = 0;
+    uint64_t line_size = 0;
     CephContext *cct;
 
-    void request(Op &op);
+    void request(OpRef &op);
     void send_reads();
     void unpin(Op &op);
     void delete_maybe() const;
-    uint64_t erase_line(Line const &l);
+    void erase_line(uint64_t offset);
 
   public:
     hobject_t oid;
-    Object(ECExtentCache &pg, hobject_t const &oid) : pg(pg), sinfo(pg.sinfo), cache(&pg.sinfo), cct(pg.cct), oid(oid) {}
-    uint64_t insert(ECUtil::shard_extent_map_t const &buffers);
-    uint64_t read_done(ECUtil::shard_extent_map_t const &result);
-    uint64_t get_projected_size() const { return projected_size; }
+    Object(ECExtentCache &pg, hobject_t const &oid) : pg(pg), sinfo(pg.sinfo), cct(pg.cct), oid(oid)
+    {
+      line_size = std::max(MIN_LINE_SIZE, pg.sinfo.get_chunk_size());
+    }
+    void insert(ECUtil::shard_extent_map_t const &buffers);
+    void write_done(ECUtil::shard_extent_map_t const &buffers, uint64_t new_size);
+    void read_done(ECUtil::shard_extent_map_t const &result);
+    [[nodiscard]] uint64_t get_projected_size() const { return projected_size; }
+    ECUtil::shard_extent_map_t get_cache(std::optional<ECUtil::shard_extent_set_t> const &set) const;
+    uint64_t line_align(uint64_t line) const;
   };
 
 
@@ -122,9 +140,16 @@ private:
     bool in_lru = false;
     int ref_count = 0;
     uint64_t offset;
+    ECUtil::shard_extent_map_t cache;
     Object &object;
 
-    Line(Object &object, uint64_t offset) : offset(offset) , object(object) {}
+    Line(Object &object, uint64_t offset) :
+      offset(offset), cache(&object.pg.sinfo), object(object) {}
+
+    ~Line()
+    {
+      object.lines.erase(offset);
+    }
 
     friend bool operator==(const Line& lhs, const Line& rhs)
     {
@@ -158,6 +183,13 @@ private:
     uint64_t projected_size);
 
 public:
+  ~ECExtentCache()
+  {
+    // This should really only be needed in failed tests, as the PG should
+    // clear up any IO before it gets destructed. However, here we make sure
+    // to clean up any outstanding IO.
+    on_change();
+  }
   explicit ECExtentCache(BackendRead &backend_read,
     LRU &lru, const ECUtil::stripe_info_t &sinfo,
     CephContext *cct) :
@@ -170,8 +202,8 @@ public:
   void read_done(hobject_t const& oid, ECUtil::shard_extent_map_t const&& update);
   void write_done(OpRef const &op, ECUtil::shard_extent_map_t const&& update);
   void on_change();
-  bool contains_object(hobject_t const &oid) const;
-  uint64_t get_projected_size(hobject_t const &oid) const;
+  [[nodiscard]] bool contains_object(hobject_t const &oid) const;
+  [[nodiscard]] uint64_t get_projected_size(hobject_t const &oid) const;
 
   template<typename CacheReadyCb>
   OpRef prepare(hobject_t const &oid,

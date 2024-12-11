@@ -548,8 +548,8 @@ public:
     } else {
       ro_start = invalid_offset;
       ro_end = invalid_offset;
-      ro_start = invalid_offset;
-      ro_end = invalid_offset;
+      start_offset = invalid_offset;
+      end_offset = invalid_offset;
     }
   }
 public:

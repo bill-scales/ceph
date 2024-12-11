@@ -12,29 +12,38 @@ using namespace ECUtil;
 #define dout_context cct
 #define dout_subsys ceph_subsys_osd
 
-void ECExtentCache::Object::request(Op &op)
+void ECExtentCache::Object::request(OpRef &op)
 {
-  uint64_t alignment = sinfo.get_chunk_size();
-  extent_set eset = op.get_pin_eset(sinfo.get_chunk_size());
+  extent_set eset = op->get_pin_eset(line_size);
 
   for (auto &&[start, len]: eset ) {
-    for (uint64_t to_pin = start; to_pin < start + len; to_pin += alignment) {
+    for (uint64_t to_pin = start; to_pin < start + len; to_pin += line_size) {
       if (!lines.contains(to_pin))
-        lines.emplace(to_pin, Line(*this, to_pin));
-      Line &l = lines.at(to_pin);
-      ceph_assert(!l.in_lru);
-      l.in_lru = false;
-      l.ref_count++;
-      op.lines.emplace_back(l);
+        lines.emplace(to_pin, make_shared<Line>(*this, to_pin));
+
+      LineRef &l = lines.at(to_pin);
+      ceph_assert(!l->in_lru);
+      l->in_lru = false;
+
+      /* I imagine there is some fantastic C++ way of doing this with a
+       * shared_ptrs... but I am not sure how to do it! So manually reference
+       * count everything EXCEPT the object.lines map.
+       */
+      l->ref_count++;
+      op->lines.emplace_back(l);
     }
   }
 
+  bool read_required = false;
+
   /* else add to read */
-  if (op.reads) {
-    for (auto &&[shard, eset]: *(op.reads)) {
+  if (op->reads) {
+    for (auto &&[shard, eset]: *(op->reads)) {
       extent_set request = eset;
-      if (cache.contains(shard)) {
-        request.subtract(cache.get_extent_set(shard));
+      for (auto &&[_, l] : lines) {
+        if (l->cache.contains(shard)) {
+          request.subtract(l->cache.get_extent_set(shard));
+        }
       }
       if (reading.contains(shard)) {
         request.subtract(reading.at(shard));
@@ -45,16 +54,20 @@ void ECExtentCache::Object::request(Op &op)
 
       if (!request.empty()) {
         requesting[shard].insert(request);
+        read_required = true;
+        requesting_ops.emplace_back(op);
       }
     }
   }
 
+
   // Store the set of writes we are doing in this IO after subtracting the previous set.
   // We require that the overlapping reads and writes in the requested IO are either read
   // or were written by a previous IO.
-  writing.insert(op.writes);
+  writing.insert(op->writes);
 
-  send_reads();
+  if (read_required) send_reads();
+  else op->read_done = true;
 }
 
 void ECExtentCache::Object::send_reads()
@@ -63,31 +76,58 @@ void ECExtentCache::Object::send_reads()
     return; // Read busy
 
   reading.swap(requesting);
+  reading_ops.swap(requesting_ops);
   pg.backend_read.backend_read(oid, reading, current_size);
 }
 
-uint64_t ECExtentCache::Object::read_done(shard_extent_map_t const &buffers)
+void ECExtentCache::Object::read_done(shard_extent_map_t const &buffers)
 {
   reading.clear();
-  uint64_t size_change = insert(buffers);
+  for (auto && op : reading_ops) {
+    op->read_done = true;
+  }
+  reading_ops.clear();
+  insert(buffers);
   send_reads();
-  return size_change;
 }
 
-uint64_t ECExtentCache::Object::insert(shard_extent_map_t const &buffers)
+uint64_t ECExtentCache::Object::line_align(uint64_t x) const
 {
-  uint64_t old_size = cache.size();
-  cache.insert(buffers);
-  writing.subtract(buffers.get_shard_extent_set());
+  return x - (x % line_size);
+}
 
-  return cache.size() - old_size;
+void ECExtentCache::Object::insert(shard_extent_map_t const &buffers)
+{
+  if (buffers.empty()) return;
+
+  /* The following gets quite inefficient for writes which write to the start
+   * and the end of a very large object, since we iterated over the middle.
+   * This seems like a strange use case, so currently this is not being
+   * optimised.
+   */
+  for (uint64_t slice_start = line_align(buffers.get_start_offset());
+       slice_start < buffers.get_end_offset();
+       slice_start += line_size) {
+    shard_extent_map_t slice = buffers.slice_map(slice_start, line_size);
+    if (!slice.empty()) {
+      /* The line should have been created already! */
+      lines.at(slice_start)->cache.insert(buffers.slice_map(slice_start, line_size));
+    }
+  }
+}
+
+void ECExtentCache::Object::write_done(shard_extent_map_t const &buffers, uint64_t new_size)
+{
+  insert(buffers);
+  writing.subtract(buffers.get_shard_extent_set());
+  current_size = new_size;
 }
 
 void ECExtentCache::Object::unpin(Op &op) {
   for ( auto &&l : op.lines) {
-    ceph_assert(l.ref_count);
-    if (!--l.ref_count) {
-      erase_line(l);
+    ceph_assert(l->ref_count);
+    if (!--l->ref_count) {
+      erase_line(l->offset);
     }
   }
 
@@ -100,12 +140,18 @@ void ECExtentCache::Object::delete_maybe() const {
   }
 }
 
-uint64_t ECExtentCache::Object::erase_line(Line const &line) {
-  uint64_t size_delta = cache.size();
-  lines.erase(line.offset);
-  size_delta -= cache.size();
-  delete_maybe();
-  return size_delta;
+void check_seset_empty_for_range(shard_extent_set_t s, uint64_t off, uint64_t len)
+{
+  for (auto &[shard, eset] : s) {
+    ceph_assert(!eset.intersects(off, len));
+  }
+}
+
+void ECExtentCache::Object::erase_line(uint64_t offset) {
+  check_seset_empty_for_range(writing, offset, line_size);
+  check_seset_empty_for_range(reading, offset, line_size);
+  check_seset_empty_for_range(requesting, offset, line_size);
+  lines.erase(offset);
 }
 
 void ECExtentCache::cache_maybe_ready() const
@@ -170,6 +216,13 @@ ECExtentCache::Op::~Op() {
 }
 
 void ECExtentCache::on_change() {
+  for (auto && [_, o] : objects) {
+    o.reading_ops.clear();
+    o.requesting_ops.clear();
+    o.reading.clear();
+    o.writing.clear();
+    o.requesting.clear();
+  }
   for (auto && op : waiting_ops) {
     op->cancel();
   }
@@ -179,7 +232,7 @@ void ECExtentCache::on_change() {
 }
 
 void ECExtentCache::execute(OpRef &op) {
-  op->request();
+  op->object.request(op);
   waiting_ops.emplace_back(op);
   counter++;
   cache_maybe_ready();
@@ -210,9 +263,8 @@ void ECExtentCache::LRU::dec_size(uint64_t _size) {
 void ECExtentCache::LRU::free_to_size(uint64_t target_size) {
   while (target_size < size && !lru.empty())
   {
-    Line l = lru.front();
-    lru.pop_front();
-    dec_size(l.object.erase_line(l));
+    // Line l = lru.front();
+    // lru.pop_front();
   }
 }
 
@@ -250,4 +302,32 @@ ECExtentCache::Op::Op(GenContextURef<shard_extent_map_t &> &&cache_ready_cb,
 
   if (object.active_ios == 1)
     object.current_size = orig_size;
+}
+
+shard_extent_map_t ECExtentCache::Object::get_cache(std::optional<shard_extent_set_t> const &set) const
+{
+  if (!set) return shard_extent_map_t(&sinfo);
+
+  map<int, extent_map> res;
+  for (auto && [shard, eset] : *set) {
+    for ( auto [off, len] : eset) {
+      for (uint64_t slice_start = line_align(off);
+           slice_start < off + len;
+           slice_start += line_size)
+      {
+        uint64_t offset = max(slice_start, off);
+        uint64_t length = min(slice_start + line_size, off  + len) - offset;
+        // This line must exist, as it was created when the op was created.
+        LineRef l = lines.at(slice_start);
+        if (l->cache.contains_shard(shard)) {
+          extent_map m = l->cache.get_extent_map(shard).intersect(offset, length);
+          if (!m.empty()) {
+            if (!res.contains(shard)) res.emplace(shard, std::move(m));
+            else res.at(shard).insert(m);
+          }
+        }
+      }
+    }
+  }
+  return shard_extent_map_t(&sinfo, std::move(res));
 }

@@ -279,7 +279,10 @@ namespace ECUtil {
   {
     for (auto && [shard, emap] : other.extent_maps)
     {
-      extent_maps[shard].insert(emap);
+      if (!extent_maps.contains(shard))
+        extent_maps.emplace(shard, emap);
+      else
+        extent_maps[shard].insert(emap);
     }
 
     if (ro_start == invalid_offset || other.ro_start < ro_start)
