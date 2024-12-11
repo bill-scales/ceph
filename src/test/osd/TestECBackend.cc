@@ -1211,3 +1211,35 @@ TEST(ECCommon, get_remaining_shards)
     ASSERT_EQ(read_request,  ref);
   }
 }
+
+TEST(ECCommon, encode)
+{
+  const uint64_t page_size = CEPH_PAGE_SIZE;
+  const uint64_t swidth = 2*page_size;
+  const unsigned int k = 2;
+  const unsigned int m = 2;
+  const int nshards = 6;
+  const uint64_t chunk_size = swidth / k;
+  const uint64_t object_size = swidth * 1024;
+
+  g_ceph_context->_conf->osd_ec_partial_reads_experimental = true;
+
+  ECUtil::stripe_info_t s(k, m, swidth, vector<int>(0));
+  ECListenerStub listenerStub;
+  ASSERT_EQ(s.get_stripe_width(), swidth);
+  ASSERT_EQ(s.get_chunk_size(), swidth/k);
+
+  const std::vector<int> chunk_mapping = {}; // no remapping
+  ErasureCodeDummyImpl *ecode = new ErasureCodeDummyImpl();
+  ErasureCodeInterfaceRef ec_impl(ecode);
+  ECCommon::ReadPipeline pipeline(g_ceph_context, ec_impl, s, &listenerStub);
+
+  ECUtil::shard_extent_map_t semap(&s);
+
+  for (int i=1; i<k+m; i++) {
+    bufferlist bl;
+    bl.append_zero(i>=k?4096:2048);
+    semap.insert_in_shard(i, 12*1024, bl);
+  }
+  semap.encode(ec_impl, nullptr, 0);
+}

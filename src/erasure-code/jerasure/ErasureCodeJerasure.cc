@@ -138,7 +138,7 @@ int ErasureCodeJerasure::encode_chunks_ptr(const set<int> &want_to_encode,
     chunks[i] = zeros;
   }
 
-  jerasure_encode(&chunks[0], &chunks[k], encoded[0].length());
+  jerasure_encode(&chunks[0], &chunks[k], size);
 
   free(zeros);
 
