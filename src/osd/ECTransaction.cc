@@ -191,8 +191,10 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
         int shard = sinfo.get_shard(raw_shard);
         will_write[shard].insert(outter_extent_superset);
         if (read_mask.contains(shard)) {
-          reads[shard].insert(outter_extent_superset);
-          reads[shard].intersection_of(read_mask[shard]);
+          extent_set _read;
+          _read.insert(outter_extent_superset);
+          _read.intersection_of(read_mask.at(shard));
+          if (!_read.empty()) reads.emplace(shard, std::move(_read));
         }
       }
     }
