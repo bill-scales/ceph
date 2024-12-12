@@ -196,6 +196,30 @@ public:
       chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
     ceph_assert(stripe_width % k == 0);
   }
+  stripe_info_t(unsigned int k, unsigned int m, uint64_t stripe_width,
+                  pg_pool_t *pool, std::vector<int> _chunk_mapping)
+      : stripe_width(stripe_width),
+        plugin_flags(0xFFFFFFFFFFFFFFFFul), // Everything enabled for test harnesses.
+        chunk_size(stripe_width / k),
+        pool(pool),
+        k(k),
+        m(m),
+        chunk_mapping(complete_chunk_mapping(_chunk_mapping, k + m)),
+        chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
+    ceph_assert(stripe_width % k == 0);
+  }
+  stripe_info_t(unsigned int k, unsigned int m, uint64_t stripe_width,
+                  pg_pool_t *pool)
+      : stripe_width(stripe_width),
+        plugin_flags(0xFFFFFFFFFFFFFFFFul), // Everything enabled for test harnesses.
+        chunk_size(stripe_width / k),
+        pool(pool),
+        k(k),
+        m(m),
+        chunk_mapping(complete_chunk_mapping(std::vector<int>(), k + m)),
+        chunk_mapping_reverse(reverse_chunk_mapping(chunk_mapping)) {
+    ceph_assert(stripe_width % k == 0);
+  }
   uint64_t object_size_to_shard_size(const uint64_t size, int shard) const {
     uint64_t remainder = size % get_stripe_width();
     uint64_t shard_size = (size - remainder) / k;

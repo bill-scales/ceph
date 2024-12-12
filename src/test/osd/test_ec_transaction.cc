@@ -41,9 +41,12 @@ TEST(ectransaction, two_writes_separated_append)
   b.append_zero(2437120);
   op.buffer_updates.insert(669856, b.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{b, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 2, 8192);
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 2, 8192, &pool);
   ECTransaction::WritePlanObj plan(
-    op,    sinfo,
+    op,
+    sinfo,
     0,
     std::nullopt,
     std::nullopt,
@@ -53,7 +56,7 @@ TEST(ectransaction, two_writes_separated_append)
   generic_derr << "plan " << plan << dendl;
 
   ASSERT_FALSE(plan.to_read);
-  ASSERT_EQ(2u, plan.will_write.shard_count());
+  ASSERT_EQ(4u, plan.will_write.shard_count());
 }
 
 TEST(ectransaction, two_writes_separated_misaligned_overwrite)
@@ -66,7 +69,9 @@ TEST(ectransaction, two_writes_separated_misaligned_overwrite)
   b.append_zero(2437120);
   op.buffer_updates.insert(669856, b.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{b, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 2, 8192, std::vector<int>(0));
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 2, 8192, &pool, std::vector<int>(0));
   object_info_t oi;
   oi.size = 3112960;
 
@@ -82,7 +87,7 @@ TEST(ectransaction, two_writes_separated_misaligned_overwrite)
   generic_derr << "plan " << plan << dendl;
 
   ASSERT_EQ(2u, (*plan.to_read).shard_count());
-  ASSERT_EQ(2u, plan.will_write.shard_count());
+  ASSERT_EQ(4u, plan.will_write.shard_count());
 }
 
 // Test writing to an object at an offset which is beyond the end of the
@@ -97,7 +102,9 @@ TEST(ectransaction, partial_write)
   a.append_zero(8);
   op.buffer_updates.insert(0, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, &pool, std::vector<int>(0));
   object_info_t oi;
   oi.size = 8;
   ECTransaction::WritePlanObj plan(
@@ -130,7 +137,9 @@ TEST(ectransaction, overlapping_write_non_aligned)
   a.append_zero(8);
   op.buffer_updates.insert(0, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, &pool, std::vector<int>(0));
   object_info_t oi;
   oi.size = 8;
   ECTransaction::WritePlanObj plan(
@@ -164,7 +173,9 @@ TEST(ectransaction, test_appending_write_non_aligned)
   a.append_zero(4096);
   op.buffer_updates.insert(3*4096, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
 
-  ECUtil::stripe_info_t sinfo(2, 1, 8192, std::vector<int>(0));
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, &pool, std::vector<int>(0));
   object_info_t oi;
   oi.size = 4*4096;
   ECTransaction::WritePlanObj plan(
@@ -178,17 +189,84 @@ TEST(ectransaction, test_appending_write_non_aligned)
 
   generic_derr << "plan " << plan << dendl;
 
-  // There should be an overlapping read, as we need to write zeros to the
-  // empty part.
-  ECUtil::shard_extent_set_t ref_read;
-  ref_read[0].insert(0, 4096);
-  ASSERT_EQ(ref_read, *plan.to_read);
+  // We are growing an option from zero with a hole.
+  ASSERT_FALSE(plan.to_read);
 
-  // The writes will cover the new zero parts.
+  // The writes will cover not cover the zero parts
   ECUtil::shard_extent_set_t ref_write;
-  ref_write[0].insert(4096, 4096);
-  ref_write[1].insert(0, 8192);
-  ref_write[2].insert(0, 8192);
+  ref_write[1].insert(4096, 4096);
+  ref_write[2].insert(4096, 4096);
   ASSERT_EQ(ref_write, plan.will_write);
 }
 
+TEST(ectransaction, append_with_large_hole)
+{
+  hobject_t h;
+  PGTransaction::ObjectOperation op;
+  bufferlist a;
+
+  // We have a 4k write quite a way after the current limit of a 4k object
+  a.append_zero(4096);
+  op.buffer_updates.insert(24*4096, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
+
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, &pool, std::vector<int>(0));
+  object_info_t oi;
+  oi.size = 25*4096;
+  ECTransaction::WritePlanObj plan(
+    op,
+    sinfo,
+    4096,
+    oi,
+    std::nullopt,
+    ECUtil::HashInfoRef(new ECUtil::HashInfo(1)),
+    nullptr);
+
+  generic_derr << "plan " << plan << dendl;
+
+  // Should not require any reads.
+  ASSERT_FALSE(plan.to_read);
+
+  // The writes will cover the new zero parts.
+  ECUtil::shard_extent_set_t ref_write;
+  ref_write[0].insert(12*4096, 4096);
+  ref_write[2].insert(12*4096, 4096);
+  ASSERT_EQ(ref_write, plan.will_write);
+}
+
+TEST(ectransaction, test_append_not_page_aligned_with_large_hole)
+{
+  hobject_t h;
+  PGTransaction::ObjectOperation op;
+  bufferlist a;
+
+  // We have a 4k write quite a way after the current limit of a 4k object
+  a.append_zero(2048);
+  op.buffer_updates.insert(24*4096 + 1024, a.length(), PGTransaction::ObjectOperation::BufferUpdate::Write{a, 0});
+
+  pg_pool_t pool;
+  pool.set_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS);
+  ECUtil::stripe_info_t sinfo(2, 1, 8192, &pool, std::vector<int>(0));
+  object_info_t oi;
+  oi.size = 25*4096;
+  ECTransaction::WritePlanObj plan(
+    op,
+    sinfo,
+    4096,
+    oi,
+    std::nullopt,
+    ECUtil::HashInfoRef(new ECUtil::HashInfo(1)),
+    nullptr);
+
+  generic_derr << "plan " << plan << dendl;
+
+  // No reads (because not yet written)
+  ASSERT_FALSE(plan.to_read);
+
+  // Writes should grow to 4k
+  ECUtil::shard_extent_set_t ref_write;
+  ref_write[0].insert(12*4096, 4096);
+  ref_write[2].insert(12*4096, 4096);
+  ASSERT_EQ(ref_write, plan.will_write);
+}
