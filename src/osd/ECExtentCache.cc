@@ -227,8 +227,13 @@ void ECExtentCache::on_change() {
     op->cancel();
   }
   waiting_ops.clear();
+}
+
+void ECExtentCache::on_change2()
+{
   ceph_assert(objects.empty());
   ceph_assert(active_ios == 0);
+  ceph_assert(idle());
 }
 
 void ECExtentCache::execute(OpRef &op) {

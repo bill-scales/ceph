@@ -202,6 +202,7 @@ public:
   void read_done(hobject_t const& oid, ECUtil::shard_extent_map_t const&& update);
   void write_done(OpRef const &op, ECUtil::shard_extent_map_t const&& update);
   void on_change();
+  void on_change2();
   [[nodiscard]] bool contains_object(hobject_t const &oid) const;
   [[nodiscard]] uint64_t get_projected_size(hobject_t const &oid) const;
 
