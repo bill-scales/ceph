@@ -1242,6 +1242,12 @@ void ECBackend::handle_sub_read_reply(
     for (auto &&[offset, buffer_list] : offset_buffer_map) {
       buffers_read.insert_in_shard(from.shard, offset, buffer_list);
     }
+    auto &want = rop.to_read.at(hoid).shard_want_to_read;
+    if (want.contains(from.shard.id)) {
+      for (auto &&[off, len] : want.at(from.shard.id)) {
+        buffers_read.zero_pad(from.shard.id, off, len);
+      }
+  }
     rop.debug_log.emplace_back(ECUtil::READ_DONE, op.from, buffers_read);
   }
   for (auto &&[hoid, req] : rop.to_read) {

@@ -67,25 +67,35 @@ static void encode_and_write(
 	             << " plan " << plan
 	             << dendl;
 
-  for (auto &&[shard_id, t]: *transactions) {
-    if (plan.will_write.contains(shard_id)) {
-      extent_set to_write_eset = plan.will_write[shard_id];
+  for (auto && [shard, to_write_eset]  : plan.will_write) {
+    shard_id_t shard_id(shard);
+    /* Zero pad, even if we are not writing.  The extent cache requires that
+     * all shards are fully populated with write data, even if the OSDs are
+     * down. This is not a fundamental requirement of the cache, but dealing
+     * with implied zeros due to incomplete writes is both difficult and
+     * removes a level of protection against bugs.
+     */
+    for (auto &&[offset, len]: to_write_eset) {
+      shard_extent_map.zero_pad(shard_id, offset, len);
+    }
+
+    if (transactions->contains(shard_id)) {
+      auto &t = transactions->at(shard_id);
       if (to_write_eset.begin().get_start() >= plan.orig_size) {
-	t.set_alloc_hint(
-	  coll_t(spg_t(pgid, shard_id)),
-	  ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-	  0, 0,
-	  CEPH_OSD_ALLOC_HINT_FLAG_SEQUENTIAL_WRITE |
-	  CEPH_OSD_ALLOC_HINT_FLAG_APPEND_ONLY);
+        t.set_alloc_hint(
+          coll_t(spg_t(pgid, shard_id)),
+          ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+          0, 0,
+          CEPH_OSD_ALLOC_HINT_FLAG_SEQUENTIAL_WRITE |
+          CEPH_OSD_ALLOC_HINT_FLAG_APPEND_ONLY);
       }
 
       for (auto &&[offset, len]: to_write_eset) {
-	buffer::list bl;
-        shard_extent_map.zero_pad(shard_id, offset, len);
-	shard_extent_map.get_buffer(shard_id, offset, len, bl);
+        buffer::list bl;
+        shard_extent_map.get_buffer(shard_id, offset, len, bl);
         t.write(coll_t(spg_t(pgid, shard_id)),
-	  ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-	  offset, bl.length(), bl, flags);
+          ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+          offset, bl.length(), bl, flags);
       }
     }
   }
@@ -204,14 +214,6 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
      * truncates/appends within a single transactions are expected be very rare.
      */
 
-    /* The zero stripe is any area that gets zeroed if not written to. It is used
-     * by appends (old size -> new size) and truncates if truncate.second >
-     * truncate.first.
-     */
-    if (aligned_orig_size < projected_size) {
-      sinfo.ro_range_to_shard_extent_set(aligned_orig_size,
-        projected_size - aligned_orig_size, zero, outter_extent_superset);
-    }
     if (op.truncate && op.truncate->first < op.truncate->second) {
       uint64_t aligned_zero_start = ECUtil::align_page_next(op.truncate->first);
       uint64_t aligned_zero_end = ECUtil::align_page_next(op.truncate->second);
