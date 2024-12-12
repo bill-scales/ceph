@@ -67,7 +67,7 @@ struct Client : public ECExtentCache::BackendRead
   optional<shard_extent_map_t> result;
 
   Client(uint64_t chunk_size, int k, int m, uint64_t cache_size) :
-    sinfo(k, chunk_size * k, m, vector<int>(0)),
+    sinfo(k, m, k*chunk_size, vector<int>(0)),
     lru(cache_size), cache(*this, lru, sinfo, g_ceph_context) {};
 
   void backend_read(hobject_t _oid, const shard_extent_set_t& request,
@@ -319,22 +319,45 @@ TEST(ECExtentCache, on_change)
   ceph_assert(dummies == 1);
   {
     shared_ptr<Dummy> d = *dummy;
-    // This should drive a request for this IO, which we do not yet honour.
+    /* Here we generate an op that we never expect to be completed. Note that
+     * some static code analysis tools suggest deleting d here. DO NOT DO THIS
+     * as we are relying on side effects from the destruction of d in this test.
+     */
     op.emplace(cl.cache.prepare(cl.oid, to_read1, to_write1, 10, 10,
       [d](shard_extent_map_t &result)
       {
         ceph_abort("Should be cancelled");
       }));
   }
-
   cl.cache.execute(*op);
-  dummy.reset();
-  ASSERT_EQ(1, dummies);
-  op.reset();
-  ASSERT_EQ(1, dummies);
-  cl.cache.on_change();
 
-  ceph_assert(dummies == 0);
+  /* We now have the following graph of objects:
+   * cache -- op -- lambda -- d
+   *                 dummy --/
+   */
+  ASSERT_EQ(1, dummies);
+
+  /* Executing the on_change will "cancel" this cache op.  This will cause it
+   * to release the lambda, reducing us down to dummy -- d
+   */
+  cl.cache.on_change();
+  ASSERT_EQ(1, dummies);
+
+  /* This emulates the rmw pipeline clearing outstanding IO.  We now have no
+   * references to d, so we should have destructed the object.
+   * */
+  dummy.reset();
+  ASSERT_EQ(0, dummies);
+
+  /* Keeping the op alive here is emulating the dummy keeping a record of the
+   * cache op. It will also be destroyed at this point by rmw pipeline.
+   */
+  ASSERT_FALSE(cl.cache.idle());
+  op.reset();
+  ASSERT_TRUE(cl.cache.idle());
+
+  // The cache has its own asserts, which we should honour.
+  cl.cache.on_change2();
 }
 
 TEST(ECExtentCache, multiple_misaligned_writes)
