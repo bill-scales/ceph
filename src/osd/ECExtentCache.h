@@ -106,7 +106,7 @@ private:
     ECUtil::shard_extent_set_t writing;
     std::list<OpRef> reading_ops;
     std::list<OpRef> requesting_ops;
-    std::map<uint64_t, LineRef> lines;
+    std::map<uint64_t, std::weak_ptr<Line>> lines;
     int active_ios = 0;
     uint64_t projected_size = 0;
     uint64_t current_size = 0;
@@ -138,7 +138,6 @@ private:
   {
   public:
     bool in_lru = false;
-    int ref_count = 0;
     uint64_t offset;
     ECUtil::shard_extent_map_t cache;
     Object &object;
@@ -154,7 +153,6 @@ private:
     friend bool operator==(const Line& lhs, const Line& rhs)
     {
       return lhs.in_lru == rhs.in_lru
-        && lhs.ref_count == rhs.ref_count
         && lhs.offset == rhs.offset
         && lhs.object.oid == rhs.object.oid;
     }

@@ -18,18 +18,15 @@ void ECExtentCache::Object::request(OpRef &op)
 
   for (auto &&[start, len]: eset ) {
     for (uint64_t to_pin = start; to_pin < start + len; to_pin += line_size) {
-      if (!lines.contains(to_pin))
-        lines.emplace(to_pin, make_shared<Line>(*this, to_pin));
-
-      LineRef &l = lines.at(to_pin);
+      LineRef l;
+      if (!lines.contains(to_pin)) {
+        l = make_shared<Line>(*this, to_pin);
+        lines.emplace(to_pin, weak_ptr(l));
+      } else {
+        l = lines.at(to_pin).lock();
+      }
       ceph_assert(!l->in_lru);
       l->in_lru = false;
-
-      /* I imagine there is some fantastic C++ way of doing this with a
-       * shared_ptrs... but I am not sure how to do it! So manually reference
-       * count everything EXCEPT the object.lines map.
-       */
-      l->ref_count++;
       op->lines.emplace_back(l);
     }
   }
@@ -40,7 +37,8 @@ void ECExtentCache::Object::request(OpRef &op)
   if (op->reads) {
     for (auto &&[shard, eset]: *(op->reads)) {
       extent_set request = eset;
-      for (auto &&[_, l] : lines) {
+      for (auto &&[_, lw] : lines) {
+        LineRef l = lw.lock();
         if (l->cache.contains(shard)) {
           request.subtract(l->cache.get_extent_set(shard));
         }
@@ -110,8 +108,9 @@ void ECExtentCache::Object::insert(shard_extent_map_t const &buffers)
        slice_start += line_size) {
     shard_extent_map_t slice = buffers.slice_map(slice_start, line_size);
     if (!slice.empty()) {
+      LineRef l = lines.at(slice_start).lock();
       /* The line should have been created already! */
-      lines.at(slice_start)->cache.insert(buffers.slice_map(slice_start, line_size));
+      l->cache.insert(buffers.slice_map(slice_start, line_size));
     }
   }
 }
@@ -124,13 +123,7 @@ void ECExtentCache::Object::write_done(shard_extent_map_t const &buffers, uint64
 }
 
 void ECExtentCache::Object::unpin(Op &op) {
-  for ( auto &&l : op.lines) {
-    ceph_assert(l->ref_count);
-    if (!--l->ref_count) {
-      erase_line(l->offset);
-    }
-  }
-
+  op.lines.clear();
   delete_maybe();
 }
 
@@ -323,7 +316,7 @@ shard_extent_map_t ECExtentCache::Object::get_cache(std::optional<shard_extent_s
         uint64_t offset = max(slice_start, off);
         uint64_t length = min(slice_start + line_size, off  + len) - offset;
         // This line must exist, as it was created when the op was created.
-        LineRef l = lines.at(slice_start);
+        LineRef l = lines.at(slice_start).lock();
         if (l->cache.contains_shard(shard)) {
           extent_map m = l->cache.get_extent_map(shard).intersect(offset, length);
           if (!m.empty()) {
