@@ -691,6 +691,15 @@ void ECTransaction::generate_transactions(
         // Depending on the write, we may or may not have the parity buffers.
         // Here we invent some buffers.
         to_write.insert_parity_buffers();
+        if (!sinfo.supports_partial_writes()) {
+          for (auto &&[shard, eset] : plan.will_write) {
+            if (sinfo.get_raw_shard(shard) >= sinfo.get_k()) continue;
+
+            for (auto [off, len] : eset) {
+              to_write.zero_pad(shard, off, len);
+            }
+          }
+        }
 	encode_and_write(pgid, oid, ec_impl, plan, to_write, fadvise_flags,
 	  transactions, dpp);
       }
