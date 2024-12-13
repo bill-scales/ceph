@@ -203,7 +203,6 @@ orig_size(orig_size) // On-disk object sizes are rounded up to the next page.
     ECUtil::shard_extent_set_t zero;
     ECUtil::shard_extent_set_t read_mask;
 
-    uint64_t aligned_orig_size = ECUtil::align_page_next(orig_size);
     sinfo.ro_size_to_read_mask(orig_size, read_mask);
 
     /* Here we deal with potentially zeroing out any buffers. We rely on a
