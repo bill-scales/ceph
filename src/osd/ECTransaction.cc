@@ -588,6 +588,44 @@ void ECTransaction::generate_transactions(
       ECUtil::shard_extent_set_t cloneable_range;
       sinfo.ro_size_to_read_mask (clone_max, cloneable_range);
 
+      if (plan.orig_size < plan.projected_size) {
+        ECUtil::shard_extent_set_t projected_cloneable_range;
+        sinfo.ro_size_to_read_mask( plan.projected_size, projected_cloneable_range);
+
+        for (auto &&[shard, eset] : projected_cloneable_range) {
+          uint64_t old_shard_size = 0;
+          if (cloneable_range.contains(shard))
+          {
+            old_shard_size = cloneable_range.at(shard).range_end();
+          }
+          uint64_t new_shard_size = eset.range_end();
+
+          if (new_shard_size == old_shard_size) continue;
+
+          uint64_t write_end = 0;
+          if (plan.will_write.contains(shard)) {
+            write_end = plan.will_write.at(shard).range_end();
+          }
+
+          if (write_end == new_shard_size) continue;
+
+          /* If code is executing here, it means that the written part of the
+           * shard does not reflect the size that EC believes the shard to be.
+           * This is not a problem for reads (they will be truncated), but it
+           * is a problem for writes, where future writes may attempt a clone
+           * off the end of the object.
+           * To solve this, we use an interesting quirk of "truncate" where we
+           * can actually truncate to a size larger than the object!
+           */
+          shard_id_t shard_id(shard);
+          auto &&t = (*transactions)[shard_id];
+          t.truncate(
+            coll_t(spg_t(pgid, shard_id)),
+            ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+            new_shard_size);
+        }
+      }
+
       set<shard_id_t> touched;
 
       for (auto &[start, len] : clone_ranges) {
