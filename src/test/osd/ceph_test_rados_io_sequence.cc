@@ -198,7 +198,9 @@ namespace {
       ("allow_pool_deep_scrubbing",
         "Enables pool deep scrub. Disabled by default.")
       ("allow_pool_scrubbing",
-        "Enables pool scrubbing. Disabled by default.");
+        "Enables pool scrubbing. Disabled by default.")
+      ("disable_pool_ec_optimizations",
+        "Disables EC optimizations. Enabled by default.");
 
     return desc;
   }
@@ -378,7 +380,8 @@ ceph::io_sequence::tester::SelectECPool::SelectECPool(
   bool allow_pool_autoscaling,
   bool allow_pool_balancer,
   bool allow_pool_deep_scrubbing,
-  bool allow_pool_scrubbing)
+  bool allow_pool_scrubbing,
+  bool disable_pool_ec_optimizations)
   : ProgramOptionSelector(rng, vm, "pool", false, false),
     rados(rados),
     dry_run(dry_run),
@@ -386,6 +389,7 @@ ceph::io_sequence::tester::SelectECPool::SelectECPool(
     allow_pool_balancer(allow_pool_balancer),
     allow_pool_deep_scrubbing(allow_pool_deep_scrubbing),
     allow_pool_scrubbing(allow_pool_scrubbing),
+    disable_pool_ec_optimizations(disable_pool_ec_optimizations),
     skm(SelectErasureKM(rng, vm)),
     spl(SelectErasurePlugin(rng, vm)),
     scs(SelectErasureChunkSize(rng, vm))
@@ -440,7 +444,8 @@ const std::string ceph::io_sequence::tester::SelectECPool::choose()
   std::string pool_name = "ec_" + plugin +
                           "_cs" + std::to_string(chunk_size) +
                           "_k" + std::to_string(k) +
-                          "_m" + std::to_string(m);
+                          "_m" + std::to_string(m) +
+                          (disable_pool_ec_optimizations?"_no_ec_opt":"");
   if (!dry_run)
   {
     create_pool(rados, pool_name, plugin, chunk_size, k, m);
@@ -606,7 +611,8 @@ ceph::io_sequence::tester::TestObject::TestObject( const std::string oid,
                                                                     rng(),
                                                                     threads,
                                                                     lock,
-                                                                    cond);
+                                                                    cond,
+                                                                    spo.get_allow_pool_ec_optimizations());
     dout(0) << "= " << oid << " pool=" << pool
             << " threads=" << threads
             << " blocksize=" << exerciser_model->get_block_size()
@@ -723,7 +729,8 @@ ceph::io_sequence::tester::TestRunner::TestRunner(po::variables_map& vm,
       vm.contains("allow_pool_autoscaling"),
       vm.contains("allow_pool_balancer"),
       vm.contains("allow_pool_deep_scrubbing"),
-      vm.contains("allow_pool_scrubbing")},
+      vm.contains("allow_pool_scrubbing"),
+      vm.contains("disable_pool_ec_optimizations")},
   snt{rng, vm},
   ssr{rng, vm}
 {
@@ -745,6 +752,7 @@ ceph::io_sequence::tester::TestRunner::TestRunner(po::variables_map& vm,
   allow_pool_balancer = vm.contains("allow_pool_balancer");
   allow_pool_deep_scrubbing = vm.contains("allow_pool_deep_scrubbing");
   allow_pool_scrubbing = vm.contains("allow_pool_scrubbing");
+  disable_pool_ec_optimizations = vm.contains("disable_pool_ec_optimizations");
 
   if (!dryrun)
   {
@@ -926,7 +934,8 @@ bool ceph::io_sequence::tester::TestRunner::run_interactive_test()
                                                           object_name, reply.acting,
                                                           sbs.choose(), rng(),
                                                           1, // 1 thread
-                                                          lock, cond);
+                                                          lock, cond,
+                                                          spo.get_allow_pool_ec_optimizations());
   }
 
   while (!done)

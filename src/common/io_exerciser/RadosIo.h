@@ -47,12 +47,13 @@ namespace ceph {
               int seed,
               int threads,
               ceph::mutex& lock,
-              ceph::condition_variable& cond);
+              ceph::condition_variable& cond,
+              bool ec_optimizations);
 
       ~RadosIo();
 
       void allow_ec_overwrites(bool allow);
-      void allow_ec_optimizations(bool allow);
+      void allow_ec_optimizations();
 
       template <int N>
       class AsyncOpInfo {

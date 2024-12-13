@@ -243,13 +243,15 @@ namespace ceph
                    bool allow_pool_autoscaling,
                    bool allow_pool_balancer,
                    bool allow_pool_deep_scrubbing,
-                   bool allow_pool_scrubbing);
+                   bool allow_pool_scrubbing,
+                   bool disable_pool_ec_optimizations);
       const std::string choose() override;
 
       bool get_allow_pool_autoscaling() { return allow_pool_autoscaling; }
       bool get_allow_pool_balancer() { return allow_pool_balancer; }
       bool get_allow_pool_deep_scrubbing() { return allow_pool_deep_scrubbing; }
       bool get_allow_pool_scrubbing() { return allow_pool_scrubbing; }
+      bool get_allow_pool_ec_optimizations() { return !disable_pool_ec_optimizations; }
       int getChosenK() const { return k; }
       int getChosenM() const { return m; }
 
@@ -267,6 +269,7 @@ namespace ceph
       bool allow_pool_balancer;
       bool allow_pool_deep_scrubbing;
       bool allow_pool_scrubbing;
+      bool disable_pool_ec_optimizations;
       int k;
       int m;
 
@@ -355,6 +358,7 @@ namespace ceph
       bool allow_pool_balancer;
       bool allow_pool_deep_scrubbing;
       bool allow_pool_scrubbing;
+      bool disable_pool_ec_optimizations;
 
       bool show_sequence;
       bool show_help;
