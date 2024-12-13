@@ -737,7 +737,7 @@ void ECTransaction::generate_transactions(
 	} else {
           for (unsigned int shard = 0; shard < sinfo.get_k_plus_m(); shard++) {
 	    if (sinfo.is_nonprimary_shard(shard_id_t(shard))) {
-              if (entry->is_written_shard(shard_id_t(shard))) {
+              if (entry->is_written_shard(shard_id_t(shard)) || plan.orig_size != plan.projected_size) {
 		// Written - erase per shard version
 		if (oi.shard_versions.erase(shard_id_t(shard))) {
 		  update = true;
@@ -811,7 +811,7 @@ void ECTransaction::generate_transactions(
 	      coll_t(spg_t(pgid, st.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
 	      to_set);
-	  } else if (entry->is_written_shard(st.first)) {
+	  } else if (entry->is_written_shard(st.first) || plan.orig_size != plan.projected_size) {
 	    // Written shard - Only update object_info attribute
 	    st.second.setattr(
 	      coll_t(spg_t(pgid, st.first)),
