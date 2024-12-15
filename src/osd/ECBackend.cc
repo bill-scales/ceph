@@ -1600,6 +1600,10 @@ void ECBackend::submit_transaction(
 
     uint64_t old_object_size = 0;
     if (rmw_pipeline.extent_cache.contains_object(oid)) {
+      /* We have a valid extent cache for this object. If we need to read, we
+       * need to behave as if the object is already the size projected by the
+       * extent cache, or we may not read enough data.  
+       */
       old_object_size = rmw_pipeline.extent_cache.get_projected_size(oid);
     } else {
       std::optional<object_info_t> old_oi = get_object_info_from_obc(obc );
