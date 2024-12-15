@@ -382,20 +382,14 @@ void ECBackend::RecoveryBackend::handle_recovery_read_complete(
     missing[shard.id].insert(buffer_superset);
   }
 
-  ECUtil::shard_extent_set_t zero_pad;
-
   uint64_t aligned_size = ECUtil::align_page_next(op.obc->obs.oi.size);
 
-  sinfo.ro_size_to_zero_mask(aligned_size, zero_pad);
-
-  for (auto &&[shard, eset] : zero_pad) {
-    eset.intersection_of(buffer_superset);
-    if (missing.contains(shard))
-      continue;
-    for (auto [z_off, z_len] : eset) {
-      bufferlist bl;
-      bl.append_zero(z_len);
-      op.returned_data->insert_in_shard(shard, z_off, bl);
+  for (auto [z_off, z_len] : buffer_superset) {
+    for (int i=0; i<sinfo.get_k_plus_m(); i++) {
+      int shard = sinfo.get_shard(i);
+      if (!missing.contains(shard)) {
+        op.returned_data->zero_pad(shard, z_off, z_len);
+      }
     }
   }
 
