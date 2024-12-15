@@ -67,6 +67,13 @@ namespace ECUtil {
     void clear() { map.clear(); }
     auto erase(int shard) { return map.erase(shard); }
     auto erase(std::map<int, extent_set>::iterator &iter) { return map.erase(iter);}
+    void erase_stripe(uint64_t offset, uint64_t length) {
+      for (auto it = map.begin(); it != map.end();) {
+        it->second.erase(offset, length);
+        if (it->second.empty()) it = map.erase(it);
+        else ++it;
+      }
+    }
     auto begin() const { return map.begin(); }
     auto begin() { return map.begin(); }
     auto end() const { return map.end(); }
