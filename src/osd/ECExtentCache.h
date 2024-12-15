@@ -71,13 +71,6 @@ public:
     {
       if (!read_done) return false;
       auto result = object.get_cache(reads);
-
-      //FIXME: This assert is likely a performance issue!
-      if (reads) {
-        ceph_assert(*reads == result.get_shard_extent_set());
-      } else {
-        ceph_assert(result.empty());
-      }
       complete = true;
         cache_ready_cb.release()->complete(result);
       return true;
@@ -102,8 +95,7 @@ private:
     ECExtentCache &pg;
     ECUtil::stripe_info_t const &sinfo;
     ECUtil::shard_extent_set_t requesting;
-    ECUtil::shard_extent_set_t reading;
-    ECUtil::shard_extent_set_t writing;
+    ECUtil::shard_extent_set_t do_not_read;
     std::list<OpRef> reading_ops;
     std::list<OpRef> requesting_ops;
     std::map<uint64_t, std::weak_ptr<Line>> lines;
@@ -111,6 +103,7 @@ private:
     uint64_t projected_size = 0;
     uint64_t current_size = 0;
     uint64_t line_size = 0;
+    bool reading = false;
     CephContext *cct;
 
     void request(OpRef &op);
