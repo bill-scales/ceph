@@ -508,7 +508,6 @@ void ECTransaction::generate_transactions(
       }
       debug(oid, "to_write", to_write, dpp);
       ldpp_dout(dpp, 20) << "generate_transactions: plan: " << plan << dendl;
-      if (plan.to_read) ceph_assert(*plan.to_read == to_write.get_shard_extent_set());
 
       std::vector<std::pair<uint64_t,uint64_t>> rollback_extents;
       std::vector<std::set<shard_id_t>> rollback_shards;
