@@ -173,7 +173,7 @@ ECExtentCache::OpRef ECExtentCache::prepare(GenContextURef<shard_extent_map_t &>
 {
 
   if (!objects.contains(oid)) {
-    objects.emplace(oid, Object(*this, oid));
+    objects.emplace(oid, Object(*this, oid, orig_size));
   }
   OpRef op = std::make_shared<Op>(
     std::move(ctx), objects.at(oid), to_read, write, orig_size, projected_size);
@@ -297,9 +297,6 @@ ECExtentCache::Op::Op(GenContextURef<shard_extent_map_t &> &&cache_ready_cb,
 {
   object.active_ios++;
   object.pg.active_ios++;
-
-  if (object.active_ios == 1)
-    object.current_size = orig_size;
 }
 
 shard_extent_map_t ECExtentCache::Object::get_cache(std::optional<shard_extent_set_t> const &set) const

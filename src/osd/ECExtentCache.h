@@ -100,8 +100,8 @@ private:
     std::list<OpRef> requesting_ops;
     std::map<uint64_t, std::weak_ptr<Line>> lines;
     int active_ios = 0;
-    uint64_t projected_size = 0;
     uint64_t current_size = 0;
+    uint64_t projected_size = 0;
     uint64_t line_size = 0;
     bool reading = false;
     CephContext *cct;
@@ -114,7 +114,7 @@ private:
 
   public:
     hobject_t oid;
-    Object(ECExtentCache &pg, hobject_t const &oid) : pg(pg), sinfo(pg.sinfo), cct(pg.cct), oid(oid)
+    Object(ECExtentCache &pg, hobject_t const &oid, uint64_t size) : pg(pg), sinfo(pg.sinfo), cct(pg.cct), oid(oid), current_size(size), projected_size(size)
     {
       line_size = std::max(MIN_LINE_SIZE, pg.sinfo.get_chunk_size());
     }
@@ -140,7 +140,7 @@ private:
 
     ~Line()
     {
-      object.lines.erase(offset);
+      object.erase_line(offset);
     }
 
     friend bool operator==(const Line& lhs, const Line& rhs)
