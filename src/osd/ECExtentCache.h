@@ -12,6 +12,7 @@ class ECExtentCache {
   class Line;
   class Object;
   typedef std::shared_ptr<Line> LineRef;
+  typedef std::list<LineRef>::iterator LineIter;
 public:
   class LRU;
   class Op;
@@ -23,16 +24,18 @@ public:
 
 public:
   class LRU {
+    friend class Object;
+    friend class ECExtentCache;
+  private:
     std::list<LineRef> lru;
     uint64_t max_size = 0;
     uint64_t size = 0;
     ceph::mutex mutex = ceph::make_mutex("ECExtentCache::LRU");
 
     void free_maybe();
-    void free_to_size(uint64_t target_size);
     void discard();
-    void inc_size(uint64_t size);
-    void dec_size(uint64_t size);
+    void add(LineRef &line);
+    void remove(LineRef &line);
   public:
     explicit LRU(uint64_t max_size) : max_size(max_size) {}
   };
@@ -41,6 +44,7 @@ public:
   {
     friend class Object;
     friend class ECExtentCache;
+    friend class Op;
 
     Object &object;
     std::optional<ECUtil::shard_extent_set_t> const reads;
@@ -114,7 +118,14 @@ private:
 
   public:
     hobject_t oid;
-    Object(ECExtentCache &pg, hobject_t const &oid, uint64_t size) : pg(pg), sinfo(pg.sinfo), cct(pg.cct), oid(oid), current_size(size), projected_size(size)
+    Object(ECExtentCache &pg, hobject_t const &oid, uint64_t size) :
+      pg(pg),
+      sinfo(pg.sinfo),
+      current_size(size),
+      projected_size(size),
+    cct(pg.cct),
+
+      oid(oid)
     {
       line_size = std::max(MIN_LINE_SIZE, pg.sinfo.get_chunk_size());
     }
@@ -130,10 +141,10 @@ private:
   class Line
   {
   public:
-    bool in_lru = false;
     uint64_t offset;
     ECUtil::shard_extent_map_t cache;
     Object &object;
+    std::unique_ptr<LineIter> lru_entry;
 
     Line(Object &object, uint64_t offset) :
       offset(offset), cache(&object.pg.sinfo), object(object) {}
@@ -145,8 +156,7 @@ private:
 
     friend bool operator==(const Line& lhs, const Line& rhs)
     {
-      return lhs.in_lru == rhs.in_lru
-        && lhs.offset == rhs.offset
+      return lhs.offset == rhs.offset
         && lhs.object.oid == rhs.object.oid;
     }
 
@@ -180,6 +190,7 @@ public:
     // clear up any IO before it gets destructed. However, here we make sure
     // to clean up any outstanding IO.
     on_change();
+    on_change2();
   }
   explicit ECExtentCache(BackendRead &backend_read,
     LRU &lru, const ECUtil::stripe_info_t &sinfo,

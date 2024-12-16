@@ -148,10 +148,7 @@ TEST(ECExtentCache, simple_write)
         cl.cache_ready(cl.oid, result);
       });
     cl.cache.execute(*op);
-    // FIXME: LRU Cache Disabled.
-    ASSERT_TRUE(cl.active_reads);
-    cl.complete_read();
-
+    ASSERT_FALSE(cl.active_reads);
     ASSERT_TRUE(cl.result);
     ASSERT_EQ(to_read, cl.result->get_extent_set());
     cl.complete_write(*op);
@@ -170,10 +167,9 @@ TEST(ECExtentCache, simple_write)
         cl.cache_ready(cl.oid, result);
       });
     cl.cache.execute(*op);
-    // FIXME: LRU Cache Disabled.
-    ASSERT_TRUE(cl.active_reads);
-    cl.complete_read();
 
+    // SHould have remained in LRU!
+    ASSERT_FALSE(cl.active_reads);
     ASSERT_EQ(to_read, cl.result->get_extent_set());
     cl.complete_write(*op);
     op.reset();

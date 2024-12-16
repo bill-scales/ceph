@@ -16,6 +16,8 @@ void ECExtentCache::Object::request(OpRef &op)
 {
   extent_set eset = op->get_pin_eset(line_size);
 
+  /* Manipulation of lines must take the mutex. */
+  pg.lru.mutex.lock();
   for (auto &&[start, len]: eset ) {
     for (uint64_t to_pin = start; to_pin < start + len; to_pin += line_size) {
       LineRef l;
@@ -24,12 +26,12 @@ void ECExtentCache::Object::request(OpRef &op)
         lines.emplace(to_pin, weak_ptr(l));
       } else {
         l = lines.at(to_pin).lock();
+        if (l->lru_entry) pg.lru.remove(l);
       }
-      ceph_assert(!l->in_lru);
-      l->in_lru = false;
       op->lines.emplace_back(l);
     }
   }
+  pg.lru.mutex.unlock();
 
   bool read_required = false;
 
@@ -127,8 +129,11 @@ void ECExtentCache::Object::write_done(shard_extent_map_t const &buffers, uint64
 }
 
 void ECExtentCache::Object::unpin(Op &op) {
+  for (auto &&l : op.lines ) {
+    // If we are about to delete our cache line, add it to the LRU instead.
+    if (l.use_count() == 1) pg.lru.add(l);
+  }
   op.lines.clear();
-  delete_maybe();
 }
 
 void ECExtentCache::Object::delete_maybe() const {
@@ -148,6 +153,7 @@ void ECExtentCache::Object::erase_line(uint64_t offset) {
   check_seset_empty_for_range(requesting, offset, line_size);
   do_not_read.erase_stripe(offset, line_size);
   lines.erase(offset);
+  delete_maybe();
 }
 
 void ECExtentCache::cache_maybe_ready() const
@@ -225,6 +231,9 @@ void ECExtentCache::on_change() {
 
 void ECExtentCache::on_change2()
 {
+  lru.discard();
+  /* If this assert fires in a unit test, make sure that all ops have completed
+   * and cleared any extent cache ops they contain */
   ceph_assert(objects.empty());
   ceph_assert(active_ios == 0);
   ceph_assert(idle());
@@ -249,30 +258,36 @@ int ECExtentCache::get_and_reset_counter()
   return ret;
 }
 
-void ECExtentCache::LRU::inc_size(uint64_t _size) {
-  ceph_assert(ceph_mutex_is_locked_by_me(mutex));
+void ECExtentCache::LRU::add(LineRef &line)
+{
+  uint64_t _size = line->cache.size();
+  if (_size == 0) return;
+
+  mutex.lock();
+  ceph_assert(!line->lru_entry);
+  auto i = lru.insert(lru.end(), line);
+  line->lru_entry = make_unique<LineIter>(i);
   size += _size;
+  free_maybe();
+  mutex.unlock();
 }
 
-void ECExtentCache::LRU::dec_size(uint64_t _size) {
-  ceph_assert(size >= _size);
-  size -= _size;
-}
-
-void ECExtentCache::LRU::free_to_size(uint64_t target_size) {
-  while (target_size < size && !lru.empty())
-  {
-    // Line l = lru.front();
-    // lru.pop_front();
-  }
+void ECExtentCache::LRU::remove(LineRef &line)
+{
+  ceph_assert(line->lru_entry);
+  size -= line->cache.size();
+  lru.erase(*line->lru_entry.release());
 }
 
 void ECExtentCache::LRU::free_maybe() {
-  free_to_size(max_size);
+  while (max_size < size) remove(lru.front());
 }
 
 void ECExtentCache::LRU::discard() {
-  free_to_size(0);
+  mutex.lock();
+  lru.clear();
+  size = 0;
+  mutex.unlock();
 }
 
 extent_set ECExtentCache::Op::get_pin_eset(uint64_t alignment) const {

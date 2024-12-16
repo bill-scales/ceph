@@ -978,7 +978,7 @@ void ECCommon::RMWPipeline::on_change()
 }
 
 void ECCommon::RMWPipeline::on_change2() {
-  extent_cache.on_change();
+  extent_cache.on_change2();
 }
 
 void ECCommon::RMWPipeline::call_write_ordered(std::function<void(void)> &&cb) {
