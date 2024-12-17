@@ -1,4 +1,5 @@
 #include "IoSequence.h"
+#include <algorithm>
 
 using IoOp = ceph::io_exerciser::IoOp;
 using Sequence = ceph::io_exerciser::Sequence;
