@@ -277,6 +277,12 @@ int ECCommon::ReadPipeline::get_min_avail_to_read_shards(
   // Make sure we don't do redundant reads for recovery
   ceph_assert(!for_recovery || !do_redundant_reads);
 
+  if (read_request.object_size == 0) {
+    dout(10) << __func__ << " empty read" << dendl;
+    ceph_assert(read_request.shard_want_to_read.empty());
+    return 0;
+  }
+
   set<int> have;
   map<shard_id_t, pg_shard_t> shards;
 
@@ -307,8 +313,6 @@ int ECCommon::ReadPipeline::get_min_avail_to_read_shards(
   extent_set extra_extents;
   ECUtil::shard_extent_set_t read_mask;
   ECUtil::shard_extent_set_t zero_mask;
-
-  ceph_assert(read_request.object_size != 0);
 
   sinfo.ro_size_to_read_mask(read_request.object_size, read_mask);
   sinfo.ro_size_to_zero_mask(read_request.object_size, zero_mask);
