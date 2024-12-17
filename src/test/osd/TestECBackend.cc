@@ -276,6 +276,11 @@ public:
     return 0;
   }
 
+  unsigned get_minimum_granularity() override { return 0; }
+  void encode_delta(const bufferptr &old_data, const bufferptr &new_data
+    , bufferptr *delta) override {}
+  void apply_delta(const std::map<int, bufferptr> &in
+    , std::map<int, bufferptr> &out) override {}
 };
 
 class ECListenerStub : public ECListener {
@@ -1190,6 +1195,7 @@ TEST(ECCommon, get_remaining_shards)
     buffer::list bl;
     bl.append_zero(chunk_size/2);
     read_result.buffers_read.insert_in_shard(0, chunk_size/2, bl);
+    read_result.processed_read_requests[0].insert(chunk_size/2, bl.length());
 
     pipeline.get_remaining_shards(hoid, read_result, read_request, false, false);
 
@@ -1218,9 +1224,6 @@ TEST(ECCommon, encode)
   const uint64_t swidth = 2*page_size;
   const unsigned int k = 2;
   const unsigned int m = 2;
-  const int nshards = 6;
-  const uint64_t chunk_size = swidth / k;
-  const uint64_t object_size = swidth * 1024;
 
   g_ceph_context->_conf->osd_ec_partial_reads_experimental = true;
 
