@@ -37,14 +37,9 @@ TEST(ECUtil, stripe_info_t_chunk_mapping)
   std::iota(forward_cm.begin(), forward_cm.end(), 0);
   std::iota(reverse_cm.rbegin(), reverse_cm.rend(), 0);
 
-
-  stripe_info_t forward_sinfo1(k, chunk_size*k, m);
-  stripe_info_t forward_sinfo2(k, chunk_size*k, m, forward_cm);
-  stripe_info_t reverse_sinfo(k, chunk_size*k, m, reverse_cm);
-
-  ASSERT_EQ(forward_cm, forward_sinfo1.get_chunk_mapping());
-  ASSERT_EQ(forward_cm, forward_sinfo2.get_chunk_mapping());
-  ASSERT_EQ(reverse_cm, reverse_sinfo.get_chunk_mapping());
+  stripe_info_t forward_sinfo1(k, m, chunk_size*k);
+  stripe_info_t forward_sinfo2(k, m, chunk_size*k, forward_cm);
+  stripe_info_t reverse_sinfo(k, m, chunk_size*k, reverse_cm);
 
   for (int i : forward_cm) {
     ASSERT_EQ(i, forward_sinfo1.get_shard(i));
@@ -65,7 +60,7 @@ TEST(ECUtil, shard_extent_map_t)
   int k=4;
   int m=2;
   int chunk_size = 4096;
-  stripe_info_t sinfo(k, chunk_size*k, m, vector<int>(0));
+  stripe_info_t sinfo(k, m, chunk_size*k, vector<int>(0));
 
   // insert_in_shard
   {
@@ -336,7 +331,7 @@ TEST(ECUtil, shard_extent_map_t_scenario_1)
   int k=2;
   int m=2;
   int chunk_size = 4096;
-  stripe_info_t sinfo(k, chunk_size*k, m, vector<int>(0));
+  stripe_info_t sinfo(k, m,  chunk_size*k, vector<int>(0));
   shard_extent_map_t semap(&sinfo);
 
   bufferlist bl;
@@ -455,7 +450,7 @@ TEST(ECUtil, shard_extent_map_t_insert_ro_buffer)
   int m=2;
   int chunk_size = 4096;
   char c = 1;
-  stripe_info_t sinfo(k, chunk_size*k, m, vector<int>(0));
+  stripe_info_t sinfo(k, m, chunk_size*k, vector<int>(0));
   shard_extent_map_t semap(&sinfo);
 
   bufferlist bl;
@@ -507,7 +502,7 @@ TEST(ECUtil, shard_extent_map_t_insert_ro_buffer_3)
   uint64_t ro_length = 32 * 1024;
 
   char c = 5;
-  stripe_info_t sinfo(k, chunk_size*k, m, vector<int>(0));
+  stripe_info_t sinfo(k, m, chunk_size*k, vector<int>(0));
   shard_extent_map_t semap(&sinfo);
   bufferlist ref;
   bufferlist in;
@@ -529,7 +524,7 @@ TEST(ECUtil, shard_extent_map_t_insert_ro_buffer_3)
 }
 
 TEST(ECUtil, sinfo_ro_size_to_read_mask) {
-  stripe_info_t sinfo(2, 16*4096, 1);
+  stripe_info_t sinfo(2, 1, 16*4096);
 
   {
     shard_extent_set_t read_mask, zero_mask;
@@ -606,7 +601,7 @@ TEST(ECUtil, sinfo_ro_size_to_read_mask) {
 
 TEST(ECUtil, slice_iterator)
 {
-  stripe_info_t sinfo(2, 2*4096, 1);
+  stripe_info_t sinfo(2, 1, 2*4096);
   shard_extent_map_t sem(&sinfo);
   {
     auto iter = sem.begin_slice_iterator();
@@ -753,7 +748,7 @@ TEST(ECUtil, slice_iterator)
 
 TEST(ECUtil, object_size_to_shard_size)
 {
-  stripe_info_t sinfo(4, 4*4096, 2);
+  stripe_info_t sinfo(4, 2, 4*4096);
   ASSERT_EQ(0x14000, sinfo.object_size_to_shard_size(0x4D000, 0));
   ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 1));
   ASSERT_EQ(0x13000, sinfo.object_size_to_shard_size(0x4D000, 2));
@@ -767,7 +762,7 @@ TEST(ECUtil, slice)
   int k=4;
   int m=2;
   int chunk_size = 4096;
-  stripe_info_t sinfo(k, k*4096, m);
+  stripe_info_t sinfo(k, m, k*4096);
   shard_extent_map_t sem(&sinfo);
 
   extent_map emap;
