@@ -50,6 +50,9 @@ public:
     std::optional<ECUtil::shard_extent_set_t> const reads;
     ECUtil::shard_extent_set_t const writes;
     bool complete = false;
+    bool invalidates_cache = false;
+    bool reading = false;
+    bool read_done = false;
     uint64_t projected_size = 0;
     GenContextURef<ECUtil::shard_extent_map_t &> cache_ready_cb;
     std::list<LineRef> lines;
@@ -64,8 +67,7 @@ public:
       ECUtil::shard_extent_set_t const &write,
       uint64_t orig_size,
       uint64_t projected_size);
-      bool reading = false;
-      bool read_done = false;
+
     ~Op();
     void cancel() { delete cache_ready_cb.release(); }
     ECUtil::shard_extent_set_t get_writes() { return writes; }
@@ -115,6 +117,7 @@ private:
     void unpin(Op &op);
     void delete_maybe() const;
     void erase_line(uint64_t offset);
+    void invalidate(OpRef &invalidating_op);
 
   public:
     hobject_t oid;

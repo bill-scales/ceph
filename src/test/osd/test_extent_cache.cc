@@ -497,3 +497,106 @@ TEST(ECExtentCache, multiple_misaligned_writes2)
   cl.complete_write(*op3);
 
 }
+
+TEST(ECExtentCache, test_invalidate)
+{
+  Client cl(256*1024, 2, 1, 1024*1024);
+
+  /* First attempt a write which does not do any reads */
+  {
+    auto to_read1 = iset_from_vector( {{{0, 4096}}});
+    auto to_write1 = iset_from_vector({{{0, 4096}}});
+    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 4096, 4096,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op1);
+    ASSERT_EQ(to_read1, cl.active_reads);
+    ASSERT_FALSE(cl.result);
+
+    /* Now perform an invalidating cache write */
+    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op2);
+
+    cl.complete_read();
+    ASSERT_TRUE(cl.result);
+    cl.complete_write(*op1);
+    ASSERT_FALSE(cl.result);
+    cl.kick_cache();
+    /* We get a valid, but empty result */
+    ASSERT_TRUE(cl.result);
+    ASSERT_FALSE(cl.active_reads);
+    cl.complete_write(*op2);
+    ASSERT_FALSE(cl.result);
+
+    cl.cache.on_change();
+    op1.reset();
+    op2.reset();
+    cl.cache.on_change2();
+  }
+
+  /* Second test, modifies, deletes, creates, then modifies.  */
+  {
+    auto to_read1 = iset_from_vector( {{{0, 8192}}});
+    auto to_write1 = iset_from_vector({{{0, 8192}}});
+    auto to_write2 = iset_from_vector({{{4096, 4096}}});
+    auto to_read3 = iset_from_vector( {{{0, 4096}}});
+    auto to_write3 = iset_from_vector({{{0, 4096}}});
+    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 8192, 8192,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    optional op3 = cl.cache.prepare(cl.oid, nullopt, to_write2, 0, 8192,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    optional op4 = cl.cache.prepare(cl.oid, to_read3, to_write3, 8192, 8192,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op1);
+    cl.cache.execute(*op2);
+    cl.cache.execute(*op3);
+    cl.cache.execute(*op4);
+
+    /* The first result must actually read. */
+    cl.complete_read();
+    cl.complete_write(*op1);
+    cl.kick_cache();
+    /* The second result is the invalidate - this should go straight through */
+    cl.complete_write(*op2);
+    cl.kick_cache();
+
+    /* The third result does not have a read, so should just work - but it only
+     * reads the second chunk. */
+    cl.complete_write(*op3);
+    cl.kick_cache();
+
+    // Op4 attempts a read, but will not get a reply. It is expected to get
+    // a null buffer (which implies zeros)
+    ASSERT_FALSE(cl.active_reads);
+    ASSERT_TRUE(cl.result);
+    ASSERT_TRUE(cl.result->empty());
+    cl.complete_write(*op4);
+
+    cl.cache.on_change();
+    op1.reset();
+    op2.reset();
+    op3.reset();
+    op4.reset();
+    cl.cache.on_change2();
+  }
+}

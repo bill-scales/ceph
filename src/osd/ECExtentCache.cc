@@ -67,6 +67,9 @@ void ECExtentCache::Object::request(OpRef &op)
      * reads.
      */
     sinfo.ro_range_to_shard_extent_set(projected_size, op->projected_size, do_not_read);
+  } else if (op->projected_size < projected_size) {
+    // Invalidate the object's cache when we see any object reduce in size.
+    op->invalidates_cache = true;
   }
   projected_size = op->projected_size;
 
@@ -134,6 +137,7 @@ void ECExtentCache::Object::unpin(Op &op) {
     if (l.use_count() == 1) pg.lru.add(l);
   }
   op.lines.clear();
+  delete_maybe();
 }
 
 void ECExtentCache::Object::delete_maybe() const {
@@ -156,10 +160,55 @@ void ECExtentCache::Object::erase_line(uint64_t offset) {
   delete_maybe();
 }
 
+void ECExtentCache::Object::invalidate(OpRef &invalidating_op)
+{
+
+  for (auto iter = lines.begin(); iter != lines.end(); ) {
+    LineRef l = iter->second.lock();
+    /* We must iterate at this point, as if the LRU entry is valid, it will
+     * remove the LRU from this array.
+     */
+    ++iter;
+    if (l->lru_entry) {
+      pg.lru.mutex.lock();
+      pg.lru.remove(l);
+      pg.lru.mutex.unlock();
+    } else {
+      // Other cache lines need to be emptied, as the cache line will be
+      // kept alive by an op.
+      l->cache.clear();
+    }
+  }
+
+  ceph_assert(!reading);
+  do_not_read.clear();
+  requesting.clear();
+  requesting_ops.clear();
+  reading_ops.clear();
+
+  current_size = invalidating_op->projected_size;
+  projected_size = current_size;
+
+  // Cache can now be replayed and invalidate teh cache!
+  invalidating_op->invalidates_cache = false;
+
+  /* We now need to reply all outstanding ops, so as to regenerate the read */
+  for (auto &op : pg.waiting_ops) {
+    if (op->object.oid == oid) {
+      op->read_done = false;
+      request(op);
+    }
+  }
+}
+
 void ECExtentCache::cache_maybe_ready() const
 {
   while (!waiting_ops.empty()) {
     OpRef op = waiting_ops.front();
+    if (op->invalidates_cache) {
+      op->object.invalidate(op);
+      ceph_assert(!op->invalidates_cache);
+    }
     /* If reads_done finds all reads a recomplete it will call the completion
      * callback. Typically, this will cause the client to execute the
      * transaction and pop the front of waiting_ops.  So we abort if either
