@@ -227,11 +227,13 @@ ECExtentCache::OpRef ECExtentCache::prepare(GenContextURef<shard_extent_map_t &>
   uint64_t projected_size)
 {
 
+  lru.mutex.lock();
   if (!objects.contains(oid)) {
     objects.emplace(oid, Object(*this, oid, orig_size));
   }
   OpRef op = std::make_shared<Op>(
-    std::move(ctx), objects.at(oid), to_read, write, orig_size, projected_size);
+    std::move(ctx), objects.at(oid), to_read, write, projected_size, invalidates_cache);
+  lru.mutex.unlock();
 
   return op;
 }
