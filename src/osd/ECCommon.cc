@@ -923,6 +923,7 @@ struct ECDummyOp : ECCommon::RMWPipeline::Op {
 
 void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
 {
+  dout(20) << __func__ << " op=" << *op << dendl;
   if (op->pg_committed_to > completed_to)
     completed_to = op->pg_committed_to;
   if (op->version > committed_to)
