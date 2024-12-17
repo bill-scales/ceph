@@ -746,6 +746,7 @@ void ECCommon::RMWPipeline::start_rmw(OpRef op)
       plan.will_write,
       plan.orig_size,
       plan.projected_size,
+      op->invalidates_cache(),
       [op](ECUtil::shard_extent_map_t &result)
       {
         op->cache_ready(op->hoid, result);
@@ -957,6 +958,7 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
         ECUtil::shard_extent_set_t(),
         op->plan.plans.at(op->hoid).projected_size, // This op does not change any sizes.
         op->plan.plans.at(op->hoid).projected_size,
+        false,
         [nop](ECUtil::shard_extent_map_t &result)
         {
           nop->cache_ready(nop->hoid, result);

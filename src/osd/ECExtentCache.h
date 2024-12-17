@@ -65,8 +65,8 @@ public:
       Object &object,
       std::optional<ECUtil::shard_extent_set_t> const &to_read,
       ECUtil::shard_extent_set_t const &write,
-      uint64_t orig_size,
-      uint64_t projected_size);
+      uint64_t projected_size,
+      bool invalidates_cache);
 
     ~Op();
     void cancel() { delete cache_ready_cb.release(); }
@@ -110,6 +110,7 @@ private:
     uint64_t projected_size = 0;
     uint64_t line_size = 0;
     bool reading = false;
+    bool cache_invalidated = false;
     CephContext *cct;
 
     void request(OpRef &op);
@@ -184,7 +185,8 @@ private:
     std::optional<ECUtil::shard_extent_set_t> const &to_read,
     ECUtil::shard_extent_set_t const &write,
     uint64_t orig_size,
-    uint64_t projected_size);
+    uint64_t projected_size,
+    bool invalidates_cache);
 
 public:
   ~ECExtentCache()
@@ -217,13 +219,14 @@ public:
     ECUtil::shard_extent_set_t const &write,
     uint64_t orig_size,
     uint64_t projected_size,
+    bool invalidates_cache,
     CacheReadyCb &&ready_cb) {
 
     GenContextURef<ECUtil::shard_extent_map_t &> ctx =
       make_gen_lambda_context<ECUtil::shard_extent_map_t &, CacheReadyCb>(
           std::forward<CacheReadyCb>(ready_cb));
 
-    return prepare(std::move(ctx), oid, to_read, write, orig_size, projected_size);
+    return prepare(std::move(ctx), oid, to_read, write, orig_size, projected_size, invalidates_cache);
   }
 
   void execute(OpRef &op);

@@ -71,6 +71,16 @@ void ECExtentCache::Object::request(OpRef &op)
     // Invalidate the object's cache when we see any object reduce in size.
     op->invalidates_cache = true;
   }
+
+  /* After a cache invalidation, we allow through a single cache-invalidating
+   * IO.
+   */
+  if (op->invalidates_cache) {
+    if (cache_invalidated) {
+      op->invalidates_cache = false;
+    }
+  }
+  cache_invalidated = false;
   projected_size = op->projected_size;
 
   if (read_required) send_reads();
@@ -192,6 +202,8 @@ void ECExtentCache::Object::invalidate(OpRef &invalidating_op)
   // Cache can now be replayed and invalidate teh cache!
   invalidating_op->invalidates_cache = false;
 
+  cache_invalidated = true;
+
   /* We now need to reply all outstanding ops, so as to regenerate the read */
   for (auto &op : pg.waiting_ops) {
     if (op->object.oid == oid) {
@@ -224,7 +236,8 @@ ECExtentCache::OpRef ECExtentCache::prepare(GenContextURef<shard_extent_map_t &>
   std::optional<shard_extent_set_t> const &to_read,
   shard_extent_set_t const &write,
   uint64_t orig_size,
-  uint64_t projected_size)
+  uint64_t projected_size,
+  bool invalidates_cache)
 {
 
   lru.mutex.lock();
@@ -353,13 +366,14 @@ ECExtentCache::Op::Op(GenContextURef<shard_extent_map_t &> &&cache_ready_cb,
   Object &object,
   std::optional<shard_extent_set_t> const &to_read,
   shard_extent_set_t const &write,
-  uint64_t orig_size,
-  uint64_t projected_size) :
+  uint64_t projected_size,
+  bool invalidates_cache) :
   object(object),
   reads(to_read),
   writes(write),
   projected_size(projected_size),
-  cache_ready_cb(std::move(cache_ready_cb))
+  cache_ready_cb(std::move(cache_ready_cb)),
+  invalidates_cache(invalidates_cache)
 {
   object.active_ios++;
   object.pg.active_ios++;
