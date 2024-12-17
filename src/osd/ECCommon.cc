@@ -958,9 +958,8 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef &op)
           nop->cache_ready(nop->hoid, result);
         });
 
-      // FIXME
-      // nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
-      // extent_cache.execute(nop->cache_ops[nop->hoid]);
+      nop->cache_ops.emplace(nop->hoid, std::move(cache_op));
+      extent_cache.execute(nop->cache_ops[nop->hoid]);
     }
   }
 
