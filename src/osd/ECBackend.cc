@@ -1592,6 +1592,10 @@ void ECBackend::submit_transaction(
       soi = get_object_info_from_obc(obc_map.at(source));
     }
 
+    if (inner_op.is_delete()) {
+      plans.invalidates_cache = true;
+    }
+
     uint64_t old_object_size = 0;
     if (rmw_pipeline.extent_cache.contains_object(oid)) {
       /* We have a valid extent cache for this object. If we need to read, we
