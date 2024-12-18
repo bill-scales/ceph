@@ -17,21 +17,20 @@ void ECExtentCache::Object::request(OpRef &op)
   extent_set eset = op->get_pin_eset(line_size);
 
   /* Manipulation of lines must take the mutex. */
-  pg.lru.mutex.lock();
   for (auto &&[start, len]: eset ) {
     for (uint64_t to_pin = start; to_pin < start + len; to_pin += line_size) {
       LineRef l;
       if (!lines.contains(to_pin)) {
         l = make_shared<Line>(*this, to_pin);
+        if (!l->cache->empty())
+          do_not_read.insert(l->cache->get_shard_extent_set());
         lines.emplace(to_pin, weak_ptr(l));
       } else {
         l = lines.at(to_pin).lock();
-        if (l->lru_entry) pg.lru.remove(l);
       }
       op->lines.emplace_back(l);
     }
   }
-  pg.lru.mutex.unlock();
 
   bool read_required = false;
 
@@ -130,7 +129,7 @@ void ECExtentCache::Object::insert(shard_extent_map_t const &buffers)
     if (!slice.empty()) {
       LineRef l = lines.at(slice_start).lock();
       /* The line should have been created already! */
-      l->cache.insert(buffers.slice_map(slice_start, line_size));
+      l->cache->insert(slice);
     }
   }
 }
@@ -142,10 +141,6 @@ void ECExtentCache::Object::write_done(shard_extent_map_t const &buffers, uint64
 }
 
 void ECExtentCache::Object::unpin(Op &op) {
-  for (auto &&l : op.lines ) {
-    // If we are about to delete our cache line, add it to the LRU instead.
-    if (l.use_count() == 1) pg.lru.add(l);
-  }
   op.lines.clear();
   delete_maybe();
 }
@@ -172,23 +167,12 @@ void ECExtentCache::Object::erase_line(uint64_t offset) {
 
 void ECExtentCache::Object::invalidate(OpRef &invalidating_op)
 {
-
-  for (auto iter = lines.begin(); iter != lines.end(); ) {
-    LineRef l = iter->second.lock();
-    /* We must iterate at this point, as if the LRU entry is valid, it will
-     * remove the LRU from this array.
-     */
-    ++iter;
-    if (l->lru_entry) {
-      pg.lru.mutex.lock();
-      pg.lru.remove(l);
-      pg.lru.mutex.unlock();
-    } else {
-      // Other cache lines need to be emptied, as the cache line will be
-      // kept alive by an op.
-      l->cache.clear();
-    }
+  for (auto &[_, l] : lines ) {
+    l.lock()->cache->clear();
   }
+
+  /* Remove all entries from the LRU */
+  pg.lru.remove_object(oid);
 
   ceph_assert(!reading);
   do_not_read.clear();
@@ -240,13 +224,11 @@ ECExtentCache::OpRef ECExtentCache::prepare(GenContextURef<shard_extent_map_t &>
   bool invalidates_cache)
 {
 
-  lru.mutex.lock();
   if (!objects.contains(oid)) {
     objects.emplace(oid, Object(*this, oid, orig_size));
   }
   OpRef op = std::make_shared<Op>(
     std::move(ctx), objects.at(oid), to_read, write, projected_size, invalidates_cache);
-  lru.mutex.unlock();
 
   return op;
 }
@@ -322,34 +304,71 @@ int ECExtentCache::get_and_reset_counter()
   return ret;
 }
 
-void ECExtentCache::LRU::add(LineRef &line)
+void ECExtentCache::LRU::erase(Key &k)
 {
-  uint64_t _size = line->cache.size();
+  erase(map.at(k).first);
+}
+
+list<ECExtentCache::LRU::Key>::iterator ECExtentCache::LRU::erase(list<Key>::iterator &it)
+{
+  size -= map.at(*it).second->size();
+  map.erase(*it);
+  return lru.erase(it);
+}
+
+void ECExtentCache::LRU::add(Line &line)
+{
+  uint64_t _size = line.cache->size();
   if (_size == 0) return;
 
+  const Key k(line.offset, line.object.oid);
+
+  shared_ptr<shard_extent_map_t> cache = line.cache;
+
   mutex.lock();
-  ceph_assert(!line->lru_entry);
-  auto i = lru.insert(lru.end(), line);
-  line->lru_entry = make_unique<LineIter>(i);
+  ceph_assert(!map.contains(k));
+  auto i = lru.insert(lru.end(), k);
+  auto j = make_pair(std::move(i), std::move(cache));
+  map.insert(std::pair(std::move(k), std::move(j)));
   size += _size;
   free_maybe();
   mutex.unlock();
 }
 
-void ECExtentCache::LRU::remove(LineRef &line)
+shared_ptr<shard_extent_map_t> ECExtentCache::LRU::find(hobject_t &oid, uint64_t offset)
 {
-  ceph_assert(line->lru_entry);
-  size -= line->cache.size();
-  lru.erase(*line->lru_entry.release());
+  Key k(offset, oid);
+  shared_ptr<shard_extent_map_t> cache = nullptr;
+  mutex.lock();
+  if (map.contains(k)) {
+    auto &&[lru_iter, c] = map.at(k);
+    cache = c;
+    erase(lru_iter);
+  }
+  mutex.unlock();
+  return cache;
+}
+
+void ECExtentCache::LRU::remove_object(hobject_t &oid)
+{
+  mutex.lock();
+  for (auto it = lru.begin(); it != lru.end(); ) {
+    if (it->oid == oid) it = erase(it);
+    else ++it;
+  }
+  mutex.unlock();
 }
 
 void ECExtentCache::LRU::free_maybe() {
-  while (max_size < size) remove(lru.front());
+  while (max_size < size) {
+    erase(lru.front());
+  }
 }
 
 void ECExtentCache::LRU::discard() {
   mutex.lock();
   lru.clear();
+  map.clear();
   size = 0;
   mutex.unlock();
 }
@@ -371,9 +390,9 @@ ECExtentCache::Op::Op(GenContextURef<shard_extent_map_t &> &&cache_ready_cb,
   object(object),
   reads(to_read),
   writes(write),
+  invalidates_cache(invalidates_cache),
   projected_size(projected_size),
-  cache_ready_cb(std::move(cache_ready_cb)),
-  invalidates_cache(invalidates_cache)
+  cache_ready_cb(std::move(cache_ready_cb))
 {
   object.active_ios++;
   object.pg.active_ios++;
@@ -394,8 +413,8 @@ shard_extent_map_t ECExtentCache::Object::get_cache(std::optional<shard_extent_s
         uint64_t length = min(slice_start + line_size, off  + len) - offset;
         // This line must exist, as it was created when the op was created.
         LineRef l = lines.at(slice_start).lock();
-        if (l->cache.contains_shard(shard)) {
-          extent_map m = l->cache.get_extent_map(shard).intersect(offset, length);
+        if (l->cache->contains_shard(shard)) {
+          extent_map m = l->cache->get_extent_map(shard).intersect(offset, length);
           if (!m.empty()) {
             if (!res.contains(shard)) res.emplace(shard, std::move(m));
             else res.at(shard).insert(m);

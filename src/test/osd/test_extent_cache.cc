@@ -59,7 +59,7 @@ shard_extent_set_t iset_from_vector(vector<vector<pair<uint64_t, uint64_t>>> &&i
 
 struct Client : public ECExtentCache::BackendRead
 {
-  hobject_t oid;
+  hobject_t oid = hobject_t().make_temp_hobject("My first object");
   stripe_info_t sinfo;
   ECExtentCache::LRU lru;
   ECExtentCache cache;
@@ -118,7 +118,7 @@ TEST(ECExtentCache, simple_write)
       CacheReadyCb &&ready_cb)
       */
 
-    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10,
+    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -142,7 +142,7 @@ TEST(ECExtentCache, simple_write)
   {
     auto to_read = iset_from_vector( {{{0, 2}}, {{0, 2}}});
     auto to_write = iset_from_vector({{{0, 10}}, {{0, 10}}});
-    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10,
+    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -161,7 +161,7 @@ TEST(ECExtentCache, simple_write)
   {
     auto to_read = iset_from_vector( {{{2, 2}}, {{2, 2}}});
     auto to_write = iset_from_vector({{{0, 10}}, {{0, 10}}});
-    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10,
+    optional op = cl.cache.prepare(cl.oid, to_read, to_write, 10, 10, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -182,7 +182,7 @@ TEST(ECExtentCache, sequential_appends) {
   auto to_write1 = iset_from_vector({{{0, 10}}});
 
   // The first write...
-  optional op1 = cl.cache.prepare(cl.oid, nullopt, to_write1, 0, 10,
+  optional op1 = cl.cache.prepare(cl.oid, nullopt, to_write1, 0, 10, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -196,7 +196,7 @@ TEST(ECExtentCache, sequential_appends) {
   ASSERT_FALSE(cl.result);
 
   // The first write...
-  optional op2 = cl.cache.prepare(cl.oid, nullopt, to_write1, 10, 20,
+  optional op2 = cl.cache.prepare(cl.oid, nullopt, to_write1, 10, 20, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -216,7 +216,7 @@ TEST(ECExtentCache, multiple_writes)
   auto to_write1 = iset_from_vector({{{0, 10}}});
 
   // This should drive a request for this IO, which we do not yet honour.
-  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 10, 10,
+  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 10, 10, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -228,7 +228,7 @@ TEST(ECExtentCache, multiple_writes)
   // Perform another request. We should not see any change in the read requests.
   auto to_read2 = iset_from_vector( {{{8, 4}}});
   auto to_write2 = iset_from_vector({{{10, 10}}});
-  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 10, 10,
+  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 10, 10, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -240,7 +240,7 @@ TEST(ECExtentCache, multiple_writes)
   // Perform another request, this to check that reads are coalesced.
   auto to_read3 = iset_from_vector( {{{32, 6}}});
   auto to_write3 = iset_from_vector({{}, {{40, 0}}});
-  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 10, 10,
+  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 10, 10, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -251,7 +251,7 @@ TEST(ECExtentCache, multiple_writes)
 
   // Finally op4, with no reads.
   auto to_write4 = iset_from_vector({{{20, 10}}});
-  optional op4 = cl.cache.prepare(cl.oid, nullopt, to_write4, 10, 10,
+  optional op4 = cl.cache.prepare(cl.oid, nullopt, to_write4, 10, 10, false,
     [&cl](shard_extent_map_t &result)
     {
       cl.cache_ready(cl.oid, result);
@@ -319,7 +319,7 @@ TEST(ECExtentCache, on_change)
      * some static code analysis tools suggest deleting d here. DO NOT DO THIS
      * as we are relying on side effects from the destruction of d in this test.
      */
-    op.emplace(cl.cache.prepare(cl.oid, to_read1, to_write1, 10, 10,
+    op.emplace(cl.cache.prepare(cl.oid, to_read1, to_write1, 10, 10, false,
       [d](shard_extent_map_t &result)
       {
         ceph_abort("Should be cancelled");
@@ -377,7 +377,7 @@ TEST(ECExtentCache, multiple_misaligned_writes)
   auto to_write3 = iset_from_vector({{{12*1024, 12*1024}}});
 
   //Perform the first write, which should result in a read.
-  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 22*1024, 22*1024,
+  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -387,7 +387,7 @@ TEST(ECExtentCache, multiple_misaligned_writes)
   ASSERT_FALSE(cl.result);
 
   // Submit the second IO.
-  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 22*1024, 22*1024,
+  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -404,7 +404,7 @@ TEST(ECExtentCache, multiple_misaligned_writes)
   cl.complete_write(*op1);
 
   // And move on to op3
-  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 22*1024, 22*1024,
+  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -448,7 +448,7 @@ TEST(ECExtentCache, multiple_misaligned_writes2)
   auto to_write3 = iset_from_vector({{{12*1024, 12*1024}}});
 
   //Perform the first write, which should result in a read.
-  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 22*1024, 22*1024,
+  optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -458,7 +458,7 @@ TEST(ECExtentCache, multiple_misaligned_writes2)
   ASSERT_FALSE(cl.result);
 
   // Submit the second IO.
-  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 22*1024, 22*1024,
+  optional op2 = cl.cache.prepare(cl.oid, to_read2, to_write2, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -475,7 +475,7 @@ TEST(ECExtentCache, multiple_misaligned_writes2)
   cl.complete_write(*op1);
 
   // And move on to op3
-  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 22*1024, 22*1024,
+  optional op3 = cl.cache.prepare(cl.oid, to_read3, to_write3, 22*1024, 22*1024, false,
   [&cl](shard_extent_map_t &result)
   {
     cl.cache_ready(cl.oid, result);
@@ -506,7 +506,7 @@ TEST(ECExtentCache, test_invalidate)
   {
     auto to_read1 = iset_from_vector( {{{0, 4096}}});
     auto to_write1 = iset_from_vector({{{0, 4096}}});
-    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 4096, 4096,
+    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 4096, 4096, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -516,7 +516,7 @@ TEST(ECExtentCache, test_invalidate)
     ASSERT_FALSE(cl.result);
 
     /* Now perform an invalidating cache write */
-    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0,
+    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -538,6 +538,7 @@ TEST(ECExtentCache, test_invalidate)
     op1.reset();
     op2.reset();
     cl.cache.on_change2();
+    ASSERT_TRUE(cl.cache.idle());
   }
 
   /* Second test, modifies, deletes, creates, then modifies.  */
@@ -547,22 +548,22 @@ TEST(ECExtentCache, test_invalidate)
     auto to_write2 = iset_from_vector({{{4096, 4096}}});
     auto to_read3 = iset_from_vector( {{{0, 4096}}});
     auto to_write3 = iset_from_vector({{{0, 4096}}});
-    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 8192, 8192,
+    optional op1 = cl.cache.prepare(cl.oid, to_read1, to_write1, 8192, 8192, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
       });
-    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0,
+    optional op2 = cl.cache.prepare(cl.oid, nullopt, shard_extent_set_t(), 4*1024, 0, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
       });
-    optional op3 = cl.cache.prepare(cl.oid, nullopt, to_write2, 0, 8192,
+    optional op3 = cl.cache.prepare(cl.oid, nullopt, to_write2, 0, 8192, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
       });
-    optional op4 = cl.cache.prepare(cl.oid, to_read3, to_write3, 8192, 8192,
+    optional op4 = cl.cache.prepare(cl.oid, to_read3, to_write3, 8192, 8192, false,
       [&cl](shard_extent_map_t &result)
       {
         cl.cache_ready(cl.oid, result);
@@ -598,5 +599,87 @@ TEST(ECExtentCache, test_invalidate)
     op3.reset();
     op4.reset();
     cl.cache.on_change2();
+    ASSERT_TRUE(cl.cache.idle());
+  }
+}
+
+TEST(ECExtentCache, test_invalidate_lru)
+{
+  uint64_t c = 4096;
+  int k = 4;
+  int m = 2;
+  Client cl(c, k, m, 1024*c);
+
+  /* Populate the cache LRU and then invalidate the cache. */
+  {
+    uint64_t bs = 3767;
+    auto io1 = iset_from_vector({{{align_page_prev(35*bs), align_page_next(36*bs) - align_page_prev(35*bs)}}});
+    io1[k].insert(io1.get_extent_superset());
+    io1[k+1].insert(io1.get_extent_superset());
+    auto io2 = iset_from_vector({{{align_page_prev(18*bs), align_page_next(19*bs) - align_page_prev(18*bs)}}});
+    io2[k].insert(io1.get_extent_superset());
+    io2[k+1].insert(io1.get_extent_superset());
+    // io 3 is the truncate
+    auto io3 = shard_extent_set_t();
+    auto io4 = iset_from_vector({{{align_page_prev(30*bs), align_page_next(31*bs) - align_page_prev(30*bs)}}});
+    io3[k].insert(io1.get_extent_superset());
+    io3[k+1].insert(io1.get_extent_superset());
+    auto io5 = iset_from_vector({{{align_page_prev(18*bs), align_page_next(19*bs) - align_page_prev(18*bs)}}});
+    io4[k].insert(io1.get_extent_superset());
+    io4[k+1].insert(io1.get_extent_superset());
+
+    optional op1 = cl.cache.prepare(cl.oid, nullopt, io1, 0, align_page_next(36*bs), false,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+
+    cl.cache.execute(*op1);
+    ASSERT_FALSE(cl.active_reads);
+    cl.complete_write(*op1);
+    op1.reset();
+
+    optional op2 = cl.cache.prepare(cl.oid, io2, io2, align_page_next(36*bs), align_page_next(36*bs), false,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op2);
+    // We have active reads because the object was discarded fro the cache
+    // and has forgotten about all the zero reads.
+    ASSERT_TRUE(cl.active_reads);
+    cl.complete_read();
+    cl.complete_write(*op2);
+    op2.reset();
+
+    optional op3 = cl.cache.prepare(cl.oid, nullopt, io3, align_page_next(36*bs), 0, false,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op3);
+    ASSERT_FALSE(cl.active_reads);
+    cl.complete_write(*op3);
+    op3.reset();
+
+    optional op4 = cl.cache.prepare(cl.oid, nullopt, io4, 0, align_page_next(30*bs), false,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op4);
+    ASSERT_FALSE(cl.active_reads);
+    cl.complete_write(*op4);
+    op4.reset();
+
+    optional op5 = cl.cache.prepare(cl.oid, io5, io5, align_page_next(30*bs), align_page_next(30*bs), false,
+      [&cl](shard_extent_map_t &result)
+      {
+        cl.cache_ready(cl.oid, result);
+      });
+    cl.cache.execute(*op5);
+    ASSERT_TRUE(cl.active_reads);
+    cl.complete_write(*op5);
+    op5.reset();
   }
 }

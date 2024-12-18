@@ -22,22 +22,57 @@ public:
     virtual ~BackendRead() = default;
   };
 
-public:
   class LRU {
+  public:
+    class Key
+    {
+    public:
+      uint64_t offset;
+      hobject_t oid;
+
+      Key(uint64_t offset, hobject_t &oid) : offset(offset), oid(oid) {};
+
+      friend bool operator==(const Key &lhs, const Key &rhs)
+      {
+        return lhs.offset == rhs.offset
+          && lhs.oid == rhs.oid;
+      }
+
+      friend bool operator!=(const Key &lhs, const Key &rhs)
+      {
+        return !(lhs == rhs);
+      }
+    };
+
+    struct KeyHash
+    {
+      std::size_t operator()(const Key &obj) const
+      {
+        std::size_t seed = 0x625610ED;
+        seed ^= (seed << 6) + (seed >> 2) + 0x1E665363 + static_cast<
+          std::size_t>(obj.offset);
+        seed ^= (seed << 6) + (seed >> 2) + 0x51343C80 + obj.oid.get_hash();
+        return seed;
+      }
+    };
+  private:
     friend class Object;
     friend class ECExtentCache;
-  private:
-    std::list<LineRef> lru;
+    std::unordered_map<Key, std::pair<std::list<Key>::iterator, std::shared_ptr<ECUtil::shard_extent_map_t>>, KeyHash> map;
+    std::list<Key> lru;
     uint64_t max_size = 0;
     uint64_t size = 0;
     ceph::mutex mutex = ceph::make_mutex("ECExtentCache::LRU");
 
     void free_maybe();
     void discard();
-    void add(LineRef &line);
-    void remove(LineRef &line);
+    void add(Line &line);
+    void erase(Key &k);
+    std::list<Key>::iterator erase(std::list<Key>::iterator &it);
+    std::shared_ptr<ECUtil::shard_extent_map_t> find(hobject_t &oid, uint64_t offset);
+    void remove_object(hobject_t &oid);
   public:
-    explicit LRU(uint64_t max_size) : max_size(max_size) {}
+    explicit LRU(uint64_t max_size) : map(), max_size(max_size) {}
   };
 
   class Op
@@ -78,7 +113,7 @@ public:
       if (!read_done) return false;
       auto result = object.get_cache(reads);
       complete = true;
-        cache_ready_cb.release()->complete(result);
+      cache_ready_cb.release()->complete(result);
       return true;
     }
 
@@ -146,15 +181,26 @@ private:
   {
   public:
     uint64_t offset;
-    ECUtil::shard_extent_map_t cache;
+    std::shared_ptr<ECUtil::shard_extent_map_t> cache;
     Object &object;
-    std::unique_ptr<LineIter> lru_entry;
 
-    Line(Object &object, uint64_t offset) :
-      offset(offset), cache(&object.pg.sinfo), object(object) {}
+    Line(Object &object,
+      uint64_t offset) :
+      offset(offset),
+      object(object)
+    {
+      std::shared_ptr<ECUtil::shard_extent_map_t> c = object.pg.lru.find(object.oid, offset);
+
+      if (c == nullptr) {
+        cache = std::make_shared<ECUtil::shard_extent_map_t>(&object.sinfo);
+      } else {
+        cache = c;
+      }
+    }
 
     ~Line()
     {
+      object.pg.lru.add(*this);
       object.erase_line(offset);
     }
 
@@ -234,5 +280,6 @@ public:
   int get_and_reset_counter();
 
 }; // ECExtentCaches
+
 
 #endif //ECEXTENTCACHE_H
