@@ -617,11 +617,13 @@ void ECTransaction::generate_transactions(
            * can actually truncate to a size larger than the object!
            */
           shard_id_t shard_id(shard);
-          auto &&t = (*transactions)[shard_id];
-          t.truncate(
-            coll_t(spg_t(pgid, shard_id)),
-            ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-            new_shard_size);
+          if (transactions->contains(shard_id)) {
+	    auto &t = transactions->at(shard_id);
+	    t.truncate(
+	      coll_t(spg_t(pgid, shard_id)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+	      new_shard_size);
+	  }
         }
       }
 
@@ -654,25 +656,26 @@ void ECTransaction::generate_transactions(
           if (!eset.intersects(start, len)) continue;
 
           // We need a clone...
-          auto &&t = (*transactions)[shard_id];
+          if (transactions->contains(shard_id)) {
+	    auto &t = transactions->at(shard_id);
+	    // Only touch once.
+	    if (!touched.contains(shard_id_t(shard))) {
+	      t.touch(
+		coll_t(spg_t(pgid, shard_id)),
+		ghobject_t(oid, entry->version.version, shard_id));
+	      touched.insert(shard_id_t(shard));
+	    }
+	    t.clone_range(
+	      coll_t(spg_t(pgid, shard_id)),
+	      ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
+	      ghobject_t(oid, entry->version.version, shard_id),
+	      start,
+	      shard_end - start,
+	      start);
 
-          // Only touch once.
-          if (!touched.contains(shard_id_t(shard))) {
-            t.touch(
-              coll_t(spg_t(pgid, shard_id)),
-              ghobject_t(oid, entry->version.version, shard_id));
-            touched.insert(shard_id_t(shard));
-          }
-          t.clone_range(
-            coll_t(spg_t(pgid, shard_id)),
-            ghobject_t(oid, ghobject_t::NO_GEN, shard_id),
-            ghobject_t(oid, entry->version.version, shard_id),
-            start,
-            shard_end - start,
-            start);
-
-          // We have done a clone, so tell the rollback.
-          to_clone_shards.insert(shard_id_t(shard));
+	    // We have done a clone, so tell the rollback.
+	    to_clone_shards.insert(shard_id_t(shard));
+	  }
         }
 
         // It is more efficent to store an empty set to represent the common
