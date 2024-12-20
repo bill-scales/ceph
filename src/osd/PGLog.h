@@ -1030,7 +1030,9 @@ protected:
 	// in increasing order of version
 	ceph_assert(i->version > last);
 	// prior_version correct (unless it is an ERROR entry)
-	ceph_assert(i->prior_version == last || i->is_error());
+	// FIXME: BILL: With partial writes prior_version may be > last
+	// we need to relax this assert for proc_replica_log, but probably don't want to relax it for the authorative log. Maybe pass in a bool to decide strictness?
+	ceph_assert(i->prior_version >= last || i->is_error());
       }
       if (i->is_error()) {
 	ldpp_dout(dpp, 20) << __func__ << ": ignoring " << *i << dendl;

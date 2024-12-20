@@ -4440,7 +4440,14 @@ struct pg_log_entry_t {
   bool invalid_pool; // only when decoding pool-less hobject based entries
   ObjectCleanRegions clean_regions;
 
+  //FIXME:BILL: I think written_shards is storing which data shards are written, it never has parity shards. present_shards
+  //is tracking data + parity shards. Maybe this is accademic and we only need to track written/present status for
+  //non-primary shards. Its really annoying to be recording present_shards in the log entry - theoretically the epoch
+  //in the log version should tell us which interval set the entry is associated with and this should have details of the
+  //present shards. However extracting this info isn't trival, and I'm not convinced replica shards retain this info.
+  //FIXME:BILL: Can we do better than a set<int>? Could we make a bitmap
   std::set<int> written_shards; // EC partial writes do not update every shard
+  std::set<int> present_shards; // EC partial writes need to know set of present shards
 
   pg_log_entry_t()
    : user_version(0), return_code(0), op(0),
@@ -4514,6 +4521,9 @@ struct pg_log_entry_t {
   /// EC partial writes: test if a shard was written
   bool is_written_shard(const shard_id_t shard) const {
     return written_shards.empty() || written_shards.contains(shard);
+  }
+  bool is_present_shard(const shard_id_t shard) const {
+    return present_shards.empty() || present_shards.contains(shard);
   }
 
   void encode_with_checksum(ceph::buffer::list& bl) const;

@@ -3123,7 +3123,55 @@ void PeeringState::proc_master_log(
       olog.head = version;
     }
   }
-
+  // For partial writes we may be able to keep some of the divergent entries
+  if (olog.head < pg_log.get_head()) {
+    // Iterate backwards to divergence
+    auto p = pg_log.get_log().log.end();
+    while (true) {
+      if (p == pg_log.get_log().log.begin()) {
+	break;
+      }
+      --p;
+      if (p->version.version <= olog.head.version) {
+	break;
+      }
+    }
+    // See if we can wind forward partially written entries
+    while (p->version == olog.head) {
+      ++p;
+      if (p == pg_log.get_log().log.end()) {
+	break;
+      }
+      if (p->is_written_shard(from.shard)) {
+	// This entry was meant to be written on from, this is the first
+	// divergent entry
+	break;
+      } else {
+	// Might be able to keep this entry
+	bool keep = true;
+        for (const auto& i : acting_recovery_backfill) {
+	  if (i == get_primary()) {
+	    continue;
+	  }
+	  const pg_info_t& pi = peer_info[i];
+	  if (p->is_present_shard(i.shard) && p->is_written_shard(i.shard) && pi.last_update < p->version) {
+	    dout(20) << "BILLPROCMASTERLOG: " << i.shard << " is missing the update for " << p->version << dendl;
+	    dout(20) << "BILLPROCMASTERLOG: Written_shards = " << p->written_shards << " present_shards = " << p->present_shards << dendl;
+	    keep = false;
+	    break;
+	  }
+	}
+	if (keep) {
+	  // This entry can be kept, only shards that didn't participate in this partial write missed the update
+          dout(20) << "BILLPROCMASTERLOG: keeping entry " << p->version << dendl;
+	  olog.head = p->version;
+	} else {
+	  // A shard is missing this write - this is the first divergent entry
+	  break;
+	}
+      }
+    }
+  }
   // merge log into our own log to build master log.  no need to
   // make any adjustments to their missing map; we are taking their
   // log to be authoritative (i.e., their entries are by definitely

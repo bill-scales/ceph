@@ -717,6 +717,11 @@ void ECTransaction::generate_transactions(
           // More efficient to encode an empty set for all shards
           entry->written_shards.clear();
         }
+	if (transactions->size() != sinfo.get_k_plus_m()) {
+	  for (auto &&[shard, t]: *transactions) {
+	      entry->present_shards.insert(shard_id_t(shard));
+	  }
+	} // Else: More efficient to encode an empty set for all present
         if (plan.hinfo)
 	  plan.hinfo->set_total_chunk_size_clear_hash(
 	    sinfo.logical_to_next_stripe_offset(plan.projected_size));
@@ -745,7 +750,13 @@ void ECTransaction::generate_transactions(
 	} else {
           for (unsigned int shard = 0; shard < sinfo.get_k_plus_m(); shard++) {
 	    if (sinfo.is_nonprimary_shard(shard_id_t(shard))) {
-              if (entry->is_written_shard(shard_id_t(shard)) || plan.orig_size != plan.projected_size) {
+	      if (!entry->is_present_shard(shard_id_t(shard))) {
+		// Absent - erase per shard version
+		if (oi.shard_versions.erase(shard_id_t(shard))) {
+		  update = true;
+		}
+		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " absent - erased to " << oi.version << dendl;
+	      } else if (entry->is_written_shard(shard_id_t(shard)) || plan.orig_size != plan.projected_size) {
 		// Written - erase per shard version
 		if (oi.shard_versions.erase(shard_id_t(shard))) {
 		  update = true;
@@ -765,6 +776,7 @@ void ECTransaction::generate_transactions(
 	      ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " blank at " << oi.version << dendl;
 	    }
           }
+	  ldpp_dout(dpp, 20) << "BILLOI: Written_shards = " << entry->written_shards << " present_shards = " << entry->present_shards << dendl;
 	}
 	if (update) {
 	  bufferlist bl;

@@ -4944,6 +4944,7 @@ void pg_log_entry_t::encode(ceph::buffer::list &bl) const
     encode(return_code, bl);
   encode(op_returns, bl);
   encode(written_shards, bl);
+  encode(present_shards, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -5017,6 +5018,7 @@ void pg_log_entry_t::decode(ceph::buffer::list::const_iterator &bl)
   }
   if (struct_v >= 15) {
     decode(written_shards, bl);
+    decode(present_shards, bl);
   }
   DECODE_FINISH(bl);
 }
@@ -5068,6 +5070,7 @@ void pg_log_entry_t::dump(Formatter *f) const
     f->close_section();
   }
   f->dump_stream("written_shards") << written_shards;
+  f->dump_stream("present_shards") << present_shards;
   {
     f->open_object_section("mod_desc");
     mod_desc.dump(f);
