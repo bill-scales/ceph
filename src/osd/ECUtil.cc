@@ -257,7 +257,7 @@ namespace ECUtil {
           out.start_offset = min(out.start_offset, range_start);
           out.end_offset = max(out.end_offset, range_end);
 
-          int raw_shard = sinfo->get_raw_shard(shard);
+          unsigned int raw_shard = sinfo->get_raw_shard(shard);
           if (raw_shard < sinfo->get_k()) {
             out.ro_start = std::min(out.ro_start, calc_ro_offset(raw_shard, range_start));
             out.ro_end = std::max(out.ro_end, calc_ro_end(raw_shard, range_end));
@@ -681,7 +681,7 @@ namespace ECUtil {
     if (resized) compute_ro_range();
   }
 
-  std::map<int, bufferlist> shard_extent_map_t::slice(int offset, int length) const
+  std::map<int, bufferlist> shard_extent_map_t::slice(uint64_t offset, uint64_t length) const
   {
     std::map<int, bufferlist> slice;
 
@@ -697,7 +697,7 @@ namespace ECUtil {
     return slice;
   }
 
-  shard_extent_map_t shard_extent_map_t::slice_map(int offset, int length) const
+  shard_extent_map_t shard_extent_map_t::slice_map(uint64_t offset, uint64_t length) const
   {
     // Range entirely contains offset - this will be common for small IO.
     if (offset <= start_offset && offset + length >= end_offset) return *this;

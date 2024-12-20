@@ -560,7 +560,7 @@ public:
     uint64_t o_end = 0;
 
     for (auto &&[shard, emap] : extent_maps) {
-      int raw_shard = sinfo->get_raw_shard(shard);
+      unsigned int raw_shard = sinfo->get_raw_shard(shard);
       uint64_t start_off = emap.get_start_off();
       uint64_t end_off = emap.get_end_off();
       o_start = std::min(o_start, start_off);
@@ -683,8 +683,8 @@ public:
   shard_extent_set_t get_extent_set();
   void insert_parity_buffers();
   void erase_shard(int shard);
-  std::map<int, bufferlist> slice(int offset, int length) const;
-  shard_extent_map_t slice_map(int offset, int length) const;
+  std::map<int, bufferlist> slice(uint64_t offset, uint64_t length) const;
+  shard_extent_map_t slice_map(uint64_t offset, uint64_t length) const;
   std::string debug_string(uint64_t inteval, uint64_t offset) const;
   void erase_stripe(uint64_t offset, uint64_t length);
   bool contains(int shard) const;
