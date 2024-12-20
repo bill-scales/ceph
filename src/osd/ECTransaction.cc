@@ -716,7 +716,10 @@ void ECTransaction::generate_transactions(
 	if (entry->written_shards.size() == sinfo.get_k()) {
           // More efficient to encode an empty set for all shards
           entry->written_shards.clear();
-        }
+        } else if (plan.orig_size != plan.projected_size) {
+	  // Must update object_info on all shards when object size changes
+          entry->written_shards.clear();
+	}
 	if (transactions->size() != sinfo.get_k_plus_m()) {
 	  for (auto &&[shard, t]: *transactions) {
 	      entry->present_shards.insert(shard_id_t(shard));
@@ -756,7 +759,7 @@ void ECTransaction::generate_transactions(
 		  update = true;
 		}
 		ldpp_dout(dpp, 20) << "BILLOI: Shard " << shard << " absent - erased to " << oi.version << dendl;
-	      } else if (entry->is_written_shard(shard_id_t(shard)) || plan.orig_size != plan.projected_size) {
+	      } else if (entry->is_written_shard(shard_id_t(shard))) {
 		// Written - erase per shard version
 		if (oi.shard_versions.erase(shard_id_t(shard))) {
 		  update = true;
@@ -831,7 +834,7 @@ void ECTransaction::generate_transactions(
 	      coll_t(spg_t(pgid, st.first)),
 	      ghobject_t(oid, ghobject_t::NO_GEN, st.first),
 	      to_set);
-	  } else if (entry->is_written_shard(st.first) || plan.orig_size != plan.projected_size) {
+	  } else if (entry->is_written_shard(st.first)) {
 	    // Written shard - Only update object_info attribute
 	    st.second.setattr(
 	      coll_t(spg_t(pgid, st.first)),
