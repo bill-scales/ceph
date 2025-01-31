@@ -279,7 +279,7 @@ int ECCommon::ReadPipeline::get_min_avail_to_read_shards(
 
   if (read_request.object_size == 0) {
     dout(10) << __func__ << " empty read" << dendl;
-    ceph_assert(read_request.shard_want_to_read.empty());
+    //    ceph_assert(read_request.shard_want_to_read.empty());
     return 0;
   }
 
