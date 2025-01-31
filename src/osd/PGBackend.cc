@@ -384,6 +384,7 @@ void PGBackend::partialwrite(
    pg_info_t *info,
    const pg_log_entry_t &entry)
 {
+#if 0
   auto dpp = get_parent()->get_dpp();
   if (!entry.written_shards.empty()) {
     // Must provide *info if log contains partial writes and mark it dirty
@@ -423,6 +424,7 @@ void PGBackend::partialwrite(
     }
     info->partial_writes_last_complete.clear();
   }
+#endif
 }
 
 void PGBackend::remove(

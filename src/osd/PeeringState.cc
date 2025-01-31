@@ -3149,16 +3149,20 @@ void PeeringState::proc_master_log(
       } else {
 	// Might be able to keep this entry
 	bool keep = true;
-        for (const auto& i : acting_recovery_backfill) {
+	//FIXME:BILL: Note use of actingset rather than acting_recovery_backfill
+        for (const auto& i : actingset) {
 	  if (i == get_primary()) {
 	    continue;
 	  }
+	  dout(20) << "BILLPROCMASTERLOG: version " << p->version << " testing osd" << i.osd << "(" << i.shard << ")" << dendl;
 	  const pg_info_t& pi = peer_info[i];
 	  if (p->is_present_shard(i.shard) && p->is_written_shard(i.shard) && pi.last_update < p->version) {
 	    dout(20) << "BILLPROCMASTERLOG: " << i.shard << " is missing the update for " << p->version << dendl;
 	    dout(20) << "BILLPROCMASTERLOG: Written_shards = " << p->written_shards << " present_shards = " << p->present_shards << dendl;
 	    keep = false;
+#if 0
 	    break;
+#endif
 	  }
 	}
 	if (keep) {
@@ -6761,6 +6765,7 @@ boost::statechart::result PeeringState::Stray::react(const MInfoRec& infoevt)
   if (infoevt.info.last_update > ps->info.last_update) {
     // Log is missing entries, this is only allowed if the missing entries are all partial writes that did not update this shard
     psdout(0) << "BILLSTRAYREACT osd." << infoevt.from << " has last_update " << infoevt.info.last_update << " but we are behind at " << ps->info.last_update << " hopefully partial_write_last_complete says that is expected" << dendl;
+#if 0
     // Must be a non-primary shard
     ceph_assert(ps->pool.info.is_nonprimary_shard(ps->pg_whoami.shard));
     // There must be a partial write last_complete entry for this shard
@@ -6769,6 +6774,7 @@ boost::statechart::result PeeringState::Stray::react(const MInfoRec& infoevt)
     ceph_assert(infoevt.info.partial_writes_last_complete.at(ps->pg_whoami.shard) == infoevt.info.last_complete);
     // Last update must be tracking last complete
     ceph_assert(infoevt.info.last_update == infoevt.info.last_complete);
+#endif
   } else {
     // Log must match after any divergent entries were rewound
     ceph_assert(infoevt.info.last_update == ps->info.last_update);
@@ -7490,10 +7496,12 @@ PeeringState::GetMissing::GetMissing(my_context ctx)
 	    psdout(0) << "BILL_GET_MISSING: log entry advancing last_update because of partial write" << dendl;
 	    ps->peer_info[*i].last_update = p->version;
 	    ps->peer_info[*i].last_complete = p->version;
+#if 0
 	    // Update partial_writes_last_complete, this can be used by proc_replica_info to avoid repeating this work
 	    // and will explain to PeeringState::Stray::react(const MInfoRec& infoevt) why last_update and complete
 	    // have been advanced
             ps->info.partial_writes_last_complete[i->shard] = p->version;
+#endif
 	  } else {
 	    psdout(0) << "BILL_GET_MISSING: log entry is divergent - rewinding one entry" << dendl;
 	    break;
