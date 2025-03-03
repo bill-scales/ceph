@@ -79,7 +79,6 @@ public:
   {
     friend class Object;
     friend class ECExtentCache;
-    friend class Op;
 
     Object &object;
     std::optional<ECUtil::shard_extent_set_t> const reads;

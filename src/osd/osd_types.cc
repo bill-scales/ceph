@@ -3641,10 +3641,12 @@ void pg_info_t::dump(Formatter *f) const
   f->dump_int("last_user_version", last_user_version);
   f->dump_stream("last_backfill") << last_backfill;
   f->open_array_section("partial_writes_last_complete");
-  for (const auto & [shard, version] : partial_writes_last_complete) {
+  for (const auto & [shard, versionrange] : partial_writes_last_complete) {
+    auto & [from, to] = versionrange;
     f->open_object_section("shard");
     f->dump_int("id", shard);
-    f->dump_stream("version") << version;
+    f->dump_stream("from") << from;
+    f->dump_stream("to") << to;
     f->close_section();
   }
   f->close_section();
@@ -3832,8 +3834,10 @@ ostream& operator<<(ostream& out, const PastIntervals::pg_interval_t& i)
 std::string PastIntervals::pg_interval_t::fmt_print() const
 {
   return fmt::format(
-      "interval({}-{} up {}({}) acting {}({}){})", first, last, up, up_primary,
-      acting, primary, maybe_went_rw ? " maybe_went_rw" : "");
+      "interval({}-{} up {}({}) acting {}({}){})", first, last,
+      pg_vector_string(up), up_primary,
+      pg_vector_string(acting), primary,
+      maybe_went_rw ? " maybe_went_rw" : "");
 }
 
 void PastIntervals::pg_interval_t::generate_test_instances(list<pg_interval_t*>& o)
@@ -5347,7 +5351,7 @@ static void _handle_dups(CephContext* cct, pg_log_t &target, const pg_log_t &oth
 }
 
 
-void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v, const pg_pool_t &pool, shard_id_t shard)
+void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v)
 {
   can_rollback_to = other.can_rollback_to;
   head = other.head;
@@ -5357,17 +5361,13 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v,
 				 << " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (pool.is_nonprimary_shard(shard) && !i->is_written_shard(shard)) {
-      lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYAFTER: skipping partial write log version " << i->version << " " << i->written_shards << dendl;
-    } else {
-      if (i->version <= v) {
-	// make tail accurate.
-	tail = i->version;
-	break;
-      }
-      lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
-      log.push_front(*i);
+    if (i->version <= v) {
+      // make tail accurate.
+      tail = i->version;
+      break;
     }
+    lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
+    log.push_front(*i);
   }
   _handle_dups(cct, *this, other, cct->_conf->osd_pg_log_dups_tracked);
   lgeneric_subdout(cct, osd, 20) << __func__ << " END v " << v
@@ -5375,7 +5375,7 @@ void pg_log_t::copy_after(CephContext* cct, const pg_log_t &other, eversion_t v,
 				 << " other.dups.size()=" << other.dups.size() << dendl;
 }
 
-void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, const pg_pool_t &pool, shard_id_t shard)
+void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max)
 {
   can_rollback_to = other.can_rollback_to;
   int n = 0;
@@ -5386,16 +5386,12 @@ void pg_log_t::copy_up_to(CephContext* cct, const pg_log_t &other, int max, cons
 				<< " other.dups.size()=" << other.dups.size() << dendl;
   for (auto i = other.log.crbegin(); i != other.log.crend(); ++i) {
     ceph_assert(i->version > other.tail);
-    if (pool.is_nonprimary_shard(shard) && !i->is_written_shard(shard)) {
-      lgeneric_subdout(cct, osd, 20) << __func__ << " BILLCOPYUPTO: skipping partial write log version " << i->version << dendl;
-    } else {
-      if (n++ >= max) {
-	tail = i->version;
-	break;
-      }
-      lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
-      log.push_front(*i);
+    if (n++ >= max) {
+      tail = i->version;
+      break;
     }
+    lgeneric_subdout(cct, osd, 20) << __func__ << " copy log version " << i->version << dendl;
+    log.push_front(*i);
   }
   _handle_dups(cct, *this, other, cct->_conf->osd_pg_log_dups_tracked);
   lgeneric_subdout(cct, osd, 20) << __func__ << " END max " << max

@@ -3033,7 +3033,7 @@ struct pg_info_t {
 
   interval_set<snapid_t> purged_snaps;
 
-  std::map<shard_id_t,eversion_t> partial_writes_last_complete; ///< last_complete for shards not modified by a partial write
+  std::map<shard_id_t,std::pair<eversion_t,eversion_t>> partial_writes_last_complete; ///< last_complete for shards not modified by a partial write
   pg_stat_t stats;
 
   pg_history_t history;
@@ -3127,7 +3127,7 @@ struct pg_fast_info_t {
   eversion_t last_update;
   eversion_t last_complete;
   version_t last_user_version;
-  std::map<shard_id_t,eversion_t> partial_writes_last_complete;
+  std::map<shard_id_t,std::pair<eversion_t,eversion_t>> partial_writes_last_complete;
   struct { // pg_stat_t stats
     eversion_t version;
     version_t reported_seq;
@@ -3265,10 +3265,12 @@ struct pg_fast_info_t {
     f->dump_stream("last_complete") << last_complete;
     f->dump_stream("last_user_version") << last_user_version;
     f->open_array_section("partial_writes_last_complete");
-    for (const auto & [shard, version] : partial_writes_last_complete) {
+    for (const auto & [shard, versionrange] : partial_writes_last_complete) {
+      auto & [from, to]  = versionrange;
       f->open_object_section("shard");
       f->dump_int("id", shard);
-      f->dump_stream("version") << version;
+      f->dump_stream("from") << from;
+      f->dump_stream("to") << to;
       f->close_section();
     }
     f->close_section();
@@ -4772,20 +4774,16 @@ public:
    *
    * @param other pg_log_t to copy from
    * @param from copy entries after this version
-   * @param pool
-   * @param shard shard that is receiving the entries
    */
-  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from, const pg_pool_t &pool, shard_id_t shard);
+  void copy_after(CephContext* cct, const pg_log_t &other, eversion_t from);
 
   /**
    * copy up to N entries
    *
    * @param other source log
    * @param max max number of entries to copy
-   * @param pool
-   * @param shard shard that is receiving the entries
    */
-  void copy_up_to(CephContext* cct, const pg_log_t &other, int max, const pg_pool_t &pool, shard_id_t shard);
+  void copy_up_to(CephContext* cct, const pg_log_t &other, int max);
 
   std::ostream& print(std::ostream& out) const;
 
@@ -5040,10 +5038,11 @@ public:
    * this needs to be called in log order as we extend the log.  it
    * assumes missing is accurate up through the previous log entry.
    */
-  void add_next_event(const pg_log_entry_t& e) {
+  void add_next_event(const pg_log_entry_t& e, const pg_pool_t &pool, shard_id_t shard) {
     std::map<hobject_t, item>::iterator missing_it;
     missing_it = missing.find(e.soid);
     bool is_missing_divergent_item = missing_it != missing.end();
+    bool skipped = false;
     if (e.prior_version == eversion_t() || e.is_clone()) {
       // new object.
       if (is_missing_divergent_item) {  // use iterator
@@ -5051,6 +5050,9 @@ public:
         // .have = nil
         missing_it->second = item(e.version, eversion_t(), e.is_delete());
         missing_it->second.clean_regions.mark_fully_dirty();
+      } else if (pool.is_nonprimary_shard(shard) && !e.is_written_shard(shard)) {
+	// new object, partial write and not already missing - skip
+	skipped = true;
       } else {
          // create new element in missing map
          // .have = nil
@@ -5066,6 +5068,9 @@ public:
         missing_it->second.clean_regions.mark_fully_dirty();
       else
         missing_it->second.clean_regions.merge(e.clean_regions);
+    } else if (pool.is_nonprimary_shard(shard) && !e.is_written_shard(shard)) {
+      // existing object, partial write and not already missing - skip
+      skipped = true;
     } else {
       // not missing, we must have prior_version (if any)
       ceph_assert(!is_missing_divergent_item);
@@ -5075,8 +5080,10 @@ public:
       else
         missing[e.soid].clean_regions = e.clean_regions;
     }
-    rmissing[e.version.version] = e.soid;
-    tracker.changed(e.soid);
+    if (!skipped) {
+      rmissing[e.version.version] = e.soid;
+      tracker.changed(e.soid);
+    }
   }
 
   void revise_need(hobject_t oid, eversion_t need, bool is_delete) {
