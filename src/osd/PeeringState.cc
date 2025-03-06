@@ -1631,7 +1631,7 @@ void PeeringState::calc_ec_acting(
       for (auto j = all_info_by_shard[shard_id_t(i)].begin();
 	   j != all_info_by_shard[shard_id_t(i)].end();
 	   ++j) {
-	ceph_assert(j->shard == i);
+	ceph_assert(static_cast<int>(j->shard) == i);
 	if (!all_info.find(*j)->second.is_incomplete() &&
 	    all_info.find(*j)->second.last_update >=
 	    auth_log_shard->second.log_tail) {
@@ -6004,7 +6004,8 @@ PeeringState::Active::Active(my_context ctx)
        p != ps->acting_recovery_backfill.end();
        ++p) {
     if (p->shard != ps->pg_whoami.shard) {
-      ps->blocked_by.insert(p->shard);
+      // FIXME?: Should this not be an OSD?
+      ps->blocked_by.insert(static_cast<int>(p->shard));
     }
   }
   pl->publish_stats_to_osd();
@@ -6180,7 +6181,8 @@ boost::statechart::result PeeringState::Active::react(const MInfoRec& infoevt)
       ps->peer_activated.insert(infoevt.from).second) {
     psdout(10) << " peer osd." << infoevt.from
 	       << " activated and committed" << dendl;
-    ps->blocked_by.erase(infoevt.from.shard);
+    // FIXME?: Should this not be an OSD?
+    ps->blocked_by.erase(static_cast<int>(infoevt.from.shard));
     pl->publish_stats_to_osd();
     if (ps->peer_activated.size() == ps->acting_recovery_backfill.size()) {
       all_activated_and_committed();
