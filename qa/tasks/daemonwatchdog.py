@@ -63,6 +63,8 @@ class DaemonWatchdog(Greenlet):
         self.thrashers = ctx.ceph[config["cluster"]].thrashers
         self.watched_processes = ctx.ceph[config["cluster"]].watched_processes
         self.assert_trackers = ctx.ceph[config["cluster"]].assert_trackers
+        self.barked = False
+        self.bark_reason = None
 
     def _run(self):
         try:
@@ -80,8 +82,15 @@ class DaemonWatchdog(Greenlet):
     def stop(self):
         self.stopping.set()
 
+    def has_barked(self):
+        return self.barked
+
+    def bark_reason(self):
+        return self.bark_reason
+
     def bark(self, reason):
         self.log("BARK! unmounting mounts and killing all daemons")
+        self.bark_reason = BarkError(reason)
         if hasattr(self.ctx, 'mounts'):
             for mount in self.ctx.mounts.values():
                 try:
@@ -107,7 +116,7 @@ class DaemonWatchdog(Greenlet):
 
         for proc in self.watched_processes:
             self.log("Killing remote process {process_id}".format(process_id=proc.id))
-            proc.set_exception(BarkError(reason))
+            proc.set_exception(self.bark_reason)
             proc.stop()
 
     def watch(self):
@@ -117,7 +126,7 @@ class DaemonWatchdog(Greenlet):
         daemon_failure_time = {}
         bark_reason = []
         while not self.stopping.is_set():
-            bark = False
+            self.barked = False
             now = time.time()
 
             osds = self.ctx.daemons.iter_daemons_of_role('osd', cluster=self.cluster)
@@ -143,7 +152,7 @@ class DaemonWatchdog(Greenlet):
                     delta = now-dt[1]
                     self.log("daemon {name} is failed for ~{t:.0f}s".format(name=name, t=delta))
                     if delta > daemon_timeout:
-                        bark = True
+                        self.barked = True
                         failures.append(f"{name}")
                         for at in self.assert_trackers:
                             if at.match_id(daemon.role, daemon.id_):
@@ -191,11 +200,11 @@ class DaemonWatchdog(Greenlet):
                     if proc.exception is not None:
                         self.log("Remote process %s failed" % proc.id)
                         bark_reason.append(f"Remote process {proc.id} threw exception {proc.exception}")
-                        bark = True
+                        self.barked = True
 
                 # If a thrasher or watched process failed then check for the earliest daemon failure
                 failures = []
-                if bark and earliest == None:
+                if self.barked and earliest == None:
                     for at in self.assert_trackers:
                         exception = at.get_exception()
                         if exception is not None:
@@ -228,10 +237,10 @@ class DaemonWatchdog(Greenlet):
                     bark_reason.append(f"{earliest.get_exception()}")
 
             except:
-                bark = True
+                self.barked = True
                 bark_reason.append(f"Watchdog bug {traceback.format_exc()}")
 
-            if bark:
+            if self.barked:
                 self.bark("\n".join(bark_reason))
                 return
 

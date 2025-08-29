@@ -215,10 +215,21 @@ def task(ctx, config):
     finally:
         log.info('joining thrashosds')
         thrash_proc.stop_and_join()
-        cluster_manager.wait_for_all_osds_up()
-        cluster_manager.flush_all_pg_stats()
-        cluster_manager.wait_for_recovery(config.get('timeout', 360))
-        if aggro:
-            cluster_manager.raw_cluster_cmd(
-                'config', 'rm', 'mgr',
-                'mgr_debug_aggressive_pg_num_changes')
+        # Do not attempt to clean up if the watchdog has barked and
+        # has already killed all the OSDs
+        if not ctx.ceph[cluster].watchdog.has_barked():
+            try:
+                cluster_manager.wait_for_all_osds_up()
+                cluster_manager.flush_all_pg_stats()
+                cluster_manager.wait_for_recovery(config.get('timeout', 360))
+                if aggro:
+                    cluster_manager.raw_cluster_cmd(
+                        'config', 'rm', 'mgr',
+                        'mgr_debug_aggressive_pg_num_changes')
+            except:
+                # Watchdog can bark during clean up too - report
+                # its failure in preference to the clean up failure
+                if not ctx.ceph[cluster].watchdog.has_barked():
+                    raise
+                else:
+                    raise ctx.ceph[cluster].watchdog.bark_reason()
