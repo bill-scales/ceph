@@ -2743,6 +2743,7 @@ class CephManager:
             if (pg['state'].count('active') and
                     not pg['state'].count('recover') and
                     not pg['state'].count('backfilling') and
+                    not pg['state'].count('backfill_toofull') and
                     not pg['state'].count('stale')):
                 num += 1
         return num
