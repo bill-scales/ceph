@@ -2934,6 +2934,53 @@ class CephManager:
                 self.log('PG %s is not active or peered' % pg['pgid'])
                 self.log(pg)
 
+    def list_not_active_clean(self):
+        """
+        List of PGs not in active+clean
+        """
+        results = []
+        pgs = self.get_pg_stats()
+        for pg in pgs:
+            if not (pg['state'].count('active') and
+                    pg['state'].count('clean') and
+                    not pg['state'].count('stale')):
+                line = f"\nPG {pg['pgid']} is {pg['state']}"
+                if (pg['state'].count('recovery_wait') or
+                    pg['state'].count('backfill_wait')):
+                    # Less interested in PGs waiting
+                    results.append(line)
+                else:
+                    results.insert(0, line)
+        if (len(results) > 4):
+            others=f"\nand {len(results) - 3} other PGs in unexpected state"
+            results=results[:3]
+            results.append(others)
+        return "".join(results)
+
+    def list_not_active_recovered(self):
+        """
+        List of PGs that have not recovered
+        """
+        results = []
+        pgs = self.get_pg_stats()
+        for pg in pgs:
+            if (not pg['state'].count('active') or
+                    pg['state'].count('recover') or
+                    pg['state'].count('backfilling') or
+                    pg['state'].count('stale')):
+                line = f"\nPG {pg['pgid']} is {pg['state']}"
+                if (pg['state'].count('recovery_wait') or
+                    pg['state'].count('backfill_wait')):
+                    # Less interested in PGs waiting
+                    results.append(line)
+                else:
+                    results.insert(0, line)
+        if (len(results) > 4):
+            others=f"\nand {len(results) - 3} other PGs in unexpected states"
+            results=results[:3]
+            results.append(others)
+        return "".join(results)
+
     def wait_for_clean(self, timeout=1200):
         """
         Returns true when all pgs are clean.
@@ -2952,7 +2999,8 @@ class CephManager:
                         self.log('dumping pgs not clean')
                         self.dump_pgs_not_active_clean()
                         assert time.time() - start < timeout, \
-                            'wait_for_clean: failed before timeout expired'
+                            ('wait_for_clean: timed out waiting for PGs to become clean' +
+                             self.list_not_active_clean())
             cur_active_clean = self.get_num_active_clean()
             if cur_active_clean != num_active_clean:
                 start = time.time()
@@ -3037,7 +3085,8 @@ class CephManager:
                         self.log('dumping pgs not recovered yet')
                         self.dump_pgs_not_active_clean()
                         assert now - start < timeout, \
-                            'wait_for_recovery: failed before timeout expired'
+                            ('wait_for_recovery: timed out waiting for PGs to recovery' +
+                             self.list_not_active_recovered())
             cur_active_recovered = self.get_num_active_recovered()
             if cur_active_recovered != num_active_recovered:
                 start = time.time()
