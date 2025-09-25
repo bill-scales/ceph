@@ -65,16 +65,37 @@ void MissingLoc::add_batch_sources_info(
   }
 }
 
+#if defined(__x86_64__)
+static inline uint64_t READTSC( void )
+{
+    uint32_t low,high;
+    __asm__ __volatile__("rdtsc" : "=a" (low), "=d" (high));
+    return (uint64_t)low | ((uint64_t)high)<<32;
+}
+#else
+static inline uint64_t READTSC( void )
+{
+  return (uint64_t)0;
+}
+#endif
+#define TIMEIT(elapsed,f) { uint64_t now = READTSC(); f ; elapsed += READTSC() - now; }
+
 bool MissingLoc::add_source_info(
   pg_shard_t fromosd,
   const pg_info_t &oinfo,
   const pg_missing_t &omissing,
   HBHandle *handle)
 {
+  const unsigned MAX_LOG = 10000;
+  unsigned logged = 0;
   bool found_missing = false;
   unsigned loop = 0;
   bool sources_updated = false;
   // found items?
+
+  ldout(cct,10) << __func__ << " STARTING" << dendl;
+  uint64_t startcycles = READTSC();
+  uint64_t logging = 0;
   for (auto p = needs_recovery_map.begin();
        p != needs_recovery_map.end();
        ++p) {
@@ -85,34 +106,35 @@ bool MissingLoc::add_source_info(
       loop = 0;
     }
     if (p->second.is_delete()) {
-      ldout(cct, 10) << __func__ << " " << soid
-		     << " delete, ignoring source" << dendl;
+      if (++logged < MAX_LOG) {
+	TIMEIT(logging, ldout(cct, 10) << __func__ << " " << soid << " delete, ignoring source" << dendl)
+      }
       continue;
     }
     if (oinfo.last_update < need) {
-      ldout(cct, 10) << "search_for_missing " << soid << " " << need
-		     << " also missing on osd." << fromosd
-		     << " (last_update " << oinfo.last_update
-		     << " < needed " << need << ")" << dendl;
+      if (++logged < MAX_LOG) {
+	TIMEIT(logging, ldout(cct, 10) << "search_for_missing " << soid << " " << need << " also missing on osd." << fromosd << " (last_update " << oinfo.last_update << " < needed " << need << ")" << dendl)
+      }
       continue;
     }
     if (p->first >= oinfo.last_backfill) {
       // FIXME: this is _probably_ true, although it could conceivably
       // be in the undefined region!  Hmm!
-      ldout(cct, 10) << "search_for_missing " << soid << " " << need
-		     << " also missing on osd." << fromosd
-		     << " (past last_backfill " << oinfo.last_backfill
-		     << ")" << dendl;
+      if (++logged < MAX_LOG) {
+	TIMEIT(logging, ldout(cct, 10) << "search_for_missing " << soid << " " << need << " also missing on osd." << fromosd << " (past last_backfill " << oinfo.last_backfill << ")" << dendl)
+      }
       continue;
     }
     if (omissing.is_missing(soid)) {
-      ldout(cct, 10) << "search_for_missing " << soid << " " << need
-		     << " also missing on osd." << fromosd << dendl;
+      if (++logged < MAX_LOG) {
+	TIMEIT(logging, ldout(cct, 10) << "search_for_missing " << soid << " " << need << " also missing on osd." << fromosd << dendl)
+      }
       continue;
     }
 
-    ldout(cct, 10) << "search_for_missing " << soid << " " << need
-		   << " is on osd." << fromosd << dendl;
+    if (++logged < MAX_LOG) {
+      TIMEIT(logging, ldout(cct, 10) << "search_for_missing " << soid << " " << need << " is on osd." << fromosd << dendl)
+    }
 
     {
       auto p = missing_loc.find(soid);
@@ -132,8 +154,16 @@ bool MissingLoc::add_source_info(
     found_missing = true;
   }
 
-  ldout(cct, 20) << "needs_recovery_map missing " << needs_recovery_map
-		 << dendl;
+  uint64_t endcycles = READTSC();
+  ldout(cct, 10) << __func__ << " Elapsed time: " << (endcycles-startcycles) << " logging time: " << logging << dendl;
+  if (logged >= MAX_LOG) {
+    ldout(cct, 10) << logged
+		   << " objects on recovery_map, logging suppressed after "
+		   << MAX_LOG << " objects" << dendl;
+  } else {
+    ldout(cct, 20) << "needs_recovery_map missing " << needs_recovery_map
+		   << dendl;
+  }
   return found_missing;
 }
 
