@@ -158,7 +158,7 @@ int KqueueDriver::add_event(int fd, int cur_mask, int add_mask)
   }
   // keep what we set
   if (fd >= sav_max)
-    resize_events(sav_max+5000);
+    resize_events(sav_max + EventCenter::INIT_EVENT_NUMBER);
   sav_events[fd].mask = cur_mask | add_mask;
   return 0;
 }

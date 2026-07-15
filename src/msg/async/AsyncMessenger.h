@@ -29,6 +29,7 @@
 #include "common/ceph_mutex.h"
 #include "common/Cond.h"
 #include "common/Thread.h"
+#include "common/config_obs.h"
 
 #include "msg/SimplePolicyMessenger.h"
 #include "msg/DispatchQueue.h"
@@ -93,7 +94,8 @@ class AsyncMessengerSocketHook : public AdminSocketHook {
  *
  */
 
-class AsyncMessenger : public SimplePolicyMessenger {
+class AsyncMessenger : public SimplePolicyMessenger,
+                       public md_config_obs_t {
   // First we have the public Messenger interface implementation...
 public:
   /**
@@ -112,6 +114,11 @@ public:
    * elsewhere.
    */
   ~AsyncMessenger() override;
+
+  // md_config_obs_t interface
+  std::vector<std::string> get_tracked_keys() const noexcept override;
+  void handle_conf_change(const ConfigProxy& conf,
+			  const std::set<std::string>& changed) override;
 
   /** @defgroup Accessors
    * @{
@@ -230,11 +237,15 @@ private:
   AsyncConnectionRef create_connect(const entity_addrvec_t& addrs, int type,
 				    bool anon);
 
-
   void _finish_bind(const entity_addrvec_t& bind_addrs,
 		    const entity_addrvec_t& listen_addrs);
 
   entity_addrvec_t _filter_addrs(const entity_addrvec_t& addrs);
+
+  /**
+   * Adjust the number of worker threads in the underlying NetworkStack.
+   */
+  void set_num_workers(unsigned n);
 
  private:
   NetworkStack *stack;
@@ -389,6 +400,13 @@ public:
   NetworkStack *get_stack() {
     return stack;
   }
+
+  /**
+   * Return the number of worker threads in the underlying NetworkStack.
+   * Implemented out-of-line so the test binary does not need to know the
+   * exact memory layout of AsyncMessenger.
+   */
+  unsigned get_num_worker();
 
   uint64_t get_nonce() const {
     return nonce;

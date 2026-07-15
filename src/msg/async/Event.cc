@@ -206,13 +206,14 @@ int EventCenter::init(int nevent, unsigned center_id, const std::string &type)
 EventCenter::~EventCenter()
 {
   {
+    // By the time the destructor runs, the owner thread must have exited its
+    // poll loop and been joined.  All EventCallback::do_request() calls must
+    // happen on the owner thread (in_thread()), so executing leftover
+    // external_events here — on the deleting thread — would violate that
+    // contract.  Assert that the queue is empty: if it is not, the shutdown
+    // sequence is buggy (see AsyncConnection::_stop()).
     std::lock_guard<std::mutex> l(external_lock);
-    while (!external_events.empty()) {
-      EventCallbackRef e = external_events.front();
-      if (e)
-        e->do_request(0);
-      external_events.pop_front();
-    }
+    ceph_assert(external_events.empty());
   }
   time_events.clear();
   //assert(time_events.empty());

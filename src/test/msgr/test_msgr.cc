@@ -2510,6 +2510,199 @@ TEST_P(MessengerTest, MarkdownTest) {
   delete server_msgr2;
 }
 
+/**
+ * Helper: retrieve the number of live workers from a Messenger.
+ * Returns -1 if the messenger is not an AsyncMessenger (e.g. not posix/async).
+ */
+static int get_num_workers(Messenger *msgr)
+{
+  auto *am = dynamic_cast<AsyncMessenger *>(msgr);
+  if (!am)
+    return -1;
+  return static_cast<int>(am->get_num_worker());
+}
+
+/**
+ * Helper: trigger a set_num_workers() call through the config observer
+ * by writing ms_async_op_threads.  The observer runs synchronously when
+ * the config value is applied, so the worker pool is resized before this
+ * function returns.
+ */
+static void set_workers(unsigned n)
+{
+  g_ceph_context->_conf.set_val("ms_async_op_threads", std::to_string(n));
+  g_ceph_context->_conf.apply_changes(nullptr);
+}
+
+/**
+ * Scenario: increase the number of worker threads while the messenger is
+ * idle (no open connections, no traffic).
+ */
+TEST_P(MessengerTest, SetNumWorkersIncreaseIdle)
+{
+  if (std::strstr(GetParam(), "async") == nullptr) {
+    GTEST_SKIP() << "set_num_workers is only supported by async messengers";
+  }
+
+  FakeDispatcher cli_dispatcher(false), srv_dispatcher(true);
+  entity_addr_t bind_addr;
+  bind_addr.parse("v2:127.0.0.1");
+  server_msgr->bind(bind_addr);
+  server_msgr->add_dispatcher_head(&srv_dispatcher);
+  server_msgr->start();
+  client_msgr->add_dispatcher_head(&cli_dispatcher);
+  client_msgr->start();
+
+  // Record the baseline worker count (whatever ms_async_op_threads was set to
+  // when the stack was created).
+  int baseline = get_num_workers(server_msgr);
+  ASSERT_GT(baseline, 0);
+
+  // Increase to baseline + 2.
+  unsigned target = static_cast<unsigned>(baseline) + 2;
+  set_workers(target);
+
+  EXPECT_EQ(get_num_workers(server_msgr), static_cast<int>(target));
+  EXPECT_EQ(get_num_workers(client_msgr), static_cast<int>(target));
+
+  server_msgr->shutdown();
+  server_msgr->wait();
+  client_msgr->shutdown();
+  client_msgr->wait();
+
+  // Restore so later tests are not affected.
+  set_workers(static_cast<unsigned>(baseline));
+}
+
+/**
+ * Scenario: decrease the number of worker threads while the messenger is
+ * idle (no open connections, no traffic).  Requires that the stack was
+ * started with at least 3 workers; if not the test is skipped.
+ */
+TEST_P(MessengerTest, SetNumWorkersDecreaseIdle)
+{
+  if (std::strstr(GetParam(), "async") == nullptr) {
+    GTEST_SKIP() << "set_num_workers is only supported by async messengers";
+  }
+
+  FakeDispatcher cli_dispatcher(false), srv_dispatcher(true);
+  entity_addr_t bind_addr;
+  bind_addr.parse("v2:127.0.0.1");
+  server_msgr->bind(bind_addr);
+  server_msgr->add_dispatcher_head(&srv_dispatcher);
+  server_msgr->start();
+  client_msgr->add_dispatcher_head(&cli_dispatcher);
+  client_msgr->start();
+
+  // First bump up to a known count so the subsequent decrease is safe
+  // regardless of the default ms_async_op_threads value.
+  int baseline = get_num_workers(server_msgr);
+  ASSERT_GT(baseline, 0);
+  unsigned high = static_cast<unsigned>(baseline) + 3;
+  set_workers(high);
+  ASSERT_EQ(get_num_workers(server_msgr), static_cast<int>(high));
+
+  // Now decrease by 2.
+  unsigned low = high - 2;
+  set_workers(low);
+
+  EXPECT_EQ(get_num_workers(server_msgr), static_cast<int>(low));
+  EXPECT_EQ(get_num_workers(client_msgr), static_cast<int>(low));
+
+  server_msgr->shutdown();
+  server_msgr->wait();
+  client_msgr->shutdown();
+  client_msgr->wait();
+
+  // Restore.
+  set_workers(static_cast<unsigned>(baseline));
+}
+
+/**
+ * Scenario: resize the worker pool (both up and down) while the messenger is
+ * under load — simultaneous message traffic, new connection opens and
+ * connection tear-downs.
+ *
+ * The test uses the existing SyntheticWorkload infrastructure and
+ * interleaves set_num_workers calls throughout the operation loop.
+ */
+TEST_P(MessengerTest, SetNumWorkersUnderLoad)
+{
+  if (std::strstr(GetParam(), "async") == nullptr) {
+    GTEST_SKIP() << "set_num_workers is only supported by async messengers";
+  }
+
+  // Record the baseline so we can restore it at the end.
+  int baseline = get_num_workers(server_msgr);
+  ASSERT_GT(baseline, 0);
+
+  // Use lossy policies so that dropped connections caused by worker removal
+  // do not stall the test waiting for lossless reconnects.
+  SyntheticWorkload test_msg(
+      4, 8, GetParam(), 50,
+      Messenger::Policy::stateless_server(0),
+      Messenger::Policy::lossy_client(0),
+      /*max_in_flight=*/32, /*max_connections=*/64);
+
+  // Seed some initial connections.
+  for (int i = 0; i < 16; ++i)
+    test_msg.generate_connection();
+
+  gen_type rng(time(nullptr));
+
+  // Cycle through a sequence of worker counts: up, higher, back down, baseline.
+  const unsigned counts[] = {
+      static_cast<unsigned>(baseline) + 2,
+      static_cast<unsigned>(baseline) + 4,
+      static_cast<unsigned>(baseline) + 2,
+      static_cast<unsigned>(baseline),
+  };
+  unsigned count_idx = 0;
+  // Trigger the first resize early.
+  unsigned next_resize_at = 200;
+  bool del_connection = true;
+  for (int i = 0; i < 2000; ++i) {
+    if (!(i % 100)) {
+      lderr(g_ceph_context) << "SetNumWorkersUnderLoad op " << i << dendl;
+      test_msg.print_internal_state();
+    }
+
+    // Periodically resize the worker pool while traffic is in flight.
+    if (static_cast<unsigned>(i) == next_resize_at &&
+        count_idx < std::size(counts)) {
+      unsigned target = counts[count_idx++];
+      lderr(g_ceph_context) << "SetNumWorkersUnderLoad resizing to "
+                            << target << " workers" << dendl;
+      set_workers(target);
+      next_resize_at += 400;
+    }
+
+    boost::uniform_int<> true_false(0, 99);
+    int val = true_false(rng);
+    if (val > 90) {
+      if (del_connection) {
+        lderr(g_ceph_context) << "Dropping connection" << dendl;
+        test_msg.drop_connection();
+      } else {
+        lderr(g_ceph_context) << "Generating connection" << dendl;
+        test_msg.generate_connection();
+      }
+      del_connection = !del_connection;
+    } else if (val > 10) {
+      lderr(g_ceph_context) << "Sending message" << dendl;
+      test_msg.send_message();
+    } else {
+      lderr(g_ceph_context) << "Usleep" << dendl;
+      usleep(rand() % 500 + 100);
+    }
+  }
+
+  test_msg.wait_for_done();
+
+  // Restore the original worker count.
+  set_workers(static_cast<unsigned>(baseline));
+}
+
 INSTANTIATE_TEST_SUITE_P(
   Messenger,
   MessengerTest,
@@ -2532,6 +2725,7 @@ int main(int argc, char **argv) {
   g_ceph_context->_conf.set_val("ms_die_on_bad_msg", "true");
   g_ceph_context->_conf.set_val("ms_die_on_old_message", "true");
   g_ceph_context->_conf.set_val("ms_max_backoff", "1");
+  g_ceph_context->_conf.set_val("debug_ms", "30");
   common_init_finish(g_ceph_context);
 
   ::testing::InitGoogleTest(&argc, argv);

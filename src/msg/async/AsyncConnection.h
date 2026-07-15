@@ -173,6 +173,10 @@ public:
 
   AsyncMessenger *async_msgr;
   uint64_t conn_id;
+  // Shared ownership of the Worker's PerfCounters so they remain valid for the
+  // lifetime of this connection, even after the Worker is reaped.
+  std::shared_ptr<PerfCounters> logger_ref;
+  std::shared_ptr<PerfCounters> labeled_logger_ref;
   PerfCounters *logger;
   PerfCounters *labeled_logger;
   int state;
@@ -230,6 +234,46 @@ private:
   char *read_buffer;
 
  public:
+  Worker *get_worker() const { return worker; }
+
+  /**
+   * Atomically reassign this loopback connection to a new worker.
+   * Must only be called on a loopback (local) connection.
+   * The caller must already hold the owning AsyncMessenger::lock.
+   * The new worker's reference count must have been incremented by the
+   * caller before this call (via get_worker()); the old worker's reference
+   * will be released here.
+   */
+  void migrate_loopback_worker(Worker *new_worker) {
+    ceph_assert(is_loopback);
+    std::lock_guard<std::mutex> cl(lock);
+    worker->release_worker();
+    worker = new_worker;
+    center = &new_worker->center;
+    if (delay_state)
+      delay_state->set_center(center);
+  }
+
+  /**
+   * Migrate this connection from its current (retiring) worker to new_worker.
+   *
+   * Safe to call from any thread. The function uses submit_to() to perform
+   * the event-center detach on the old worker's thread and the re-attach on
+   * the new worker's thread, so there are no races with in-flight event
+   * callbacks.
+   *
+   * After this call returns:
+   *   - The old worker will deliver no further events to this connection.
+   *   - The new worker will deliver future events.
+   *   - No registered events are discarded; the socket is not closed.
+   *   - The old worker's reference count is decremented; new_worker's is
+   *     incremented by the caller before calling this function.
+   *
+   * Must NOT be called for loopback connections (use migrate_loopback_worker).
+   * Must NOT be called if the connection is already in STATE_CLOSED/STATE_NONE.
+   */
+  void migrate_worker(Worker *new_worker);
+
   // used by eventcallback
   void handle_write();
   void handle_write_callback();

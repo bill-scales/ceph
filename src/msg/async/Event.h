@@ -93,6 +93,7 @@ class EventCenter {
  public:
   // should be enough;
   static const int MAX_EVENTCENTER = 24;
+  static const int INIT_EVENT_NUMBER = 5000;
 
  private:
   using clock_type = ceph::coarse_mono_clock;

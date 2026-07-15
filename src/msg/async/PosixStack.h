@@ -55,6 +55,7 @@ class PosixNetworkStack : public NetworkStack {
   void join_worker(unsigned i) override {
     ceph_assert(threads.size() > i && threads[i].joinable());
     threads[i].join();
+    threads.erase(threads.begin() + i);
   }
 };
 

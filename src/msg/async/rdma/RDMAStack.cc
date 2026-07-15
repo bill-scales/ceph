@@ -810,4 +810,5 @@ void RDMAStack::join_worker(unsigned i)
 {
   ceph_assert(threads.size() > i && threads[i].joinable());
   threads[i].join();
+  threads.erase(threads.begin() + i);
 }

@@ -436,6 +436,7 @@ AsyncMessenger::AsyncMessenger(CephContext *cct, entity_name_t name,
               "AsyncMessengerSocketHook");
         }
       });
+  cct->_conf.add_observer(this);
 }
 
 /**
@@ -444,6 +445,7 @@ AsyncMessenger::AsyncMessenger(CephContext *cct, entity_name_t name,
  */
 AsyncMessenger::~AsyncMessenger()
 {
+  cct->_conf.remove_observer(this);
   cct->modify_msgr_hook(
       []() -> AdminSocketHook* { return nullptr; },
       [&](AdminSocketHook* ptr) {
@@ -1215,4 +1217,157 @@ void AsyncMessenger::reap_dead()
     }
     deleted_conns.clear();
   }
+}
+
+std::vector<std::string> AsyncMessenger::get_tracked_keys() const noexcept
+{
+  return {"ms_async_op_threads"};
+}
+
+void AsyncMessenger::handle_conf_change(const ConfigProxy& conf,
+					const std::set<std::string>& changed)
+{
+  if (changed.count("ms_async_op_threads")) {
+    if (stack->support_local_listen_table()) {
+      // Adjusting number of threads not supported by dpdk transport
+      // type yet because it also has a Processor per thread
+      ldout(cct, 5) << __func__
+                    << " ms_async_op_threads changed but dynamic resize is"
+                       " not supported for this transport type" << dendl;
+      return;
+    }
+    unsigned n = conf->ms_async_op_threads;
+    if (n == 0) {
+      ldout(cct, 1) << __func__
+                    << " ms_async_op_threads must be >= 1, ignoring" << dendl;
+      return;
+    }
+    if (n >= EventCenter::MAX_EVENTCENTER) {
+      ldout(cct, 1) << __func__ << " ms_async_op_threads " << n
+                    << " exceeds max " << EventCenter::MAX_EVENTCENTER
+                    << ", clamping" << dendl;
+      n = EventCenter::MAX_EVENTCENTER;
+    }
+    ldout(cct, 1) << __func__ << " adjusting worker count to " << n << dendl;
+    set_num_workers(n);
+  }
+}
+
+void AsyncMessenger::set_num_workers(unsigned n)
+{
+  ceph_assert(!stack->support_local_listen_table());
+  ceph_assert(n >= 1);
+
+  // Clamp n against the hard limit.  set_num_workers() on the stack will also
+  // clamp, but we need the final value here to know which workers are retiring.
+  if (n >= EventCenter::MAX_EVENTCENTER)
+    n = EventCenter::MAX_EVENTCENTER - 1;
+
+  // Tell the stack to update its target.  This is idempotent: the first
+  // messenger to call this sets target_num_workers and marks the retiring
+  // workers; subsequent callers with the same n are no-ops at the stack level.
+  // We MUST NOT short-circuit here on behalf of the stack's idempotency: this
+  // messenger still has to migrate its local_worker and migrate its own
+  // connections regardless of whether an earlier messenger already told the
+  // stack to shrink.
+  stack->set_num_workers(n);
+
+  // How many worker slots exist in total (active + still-retiring)?
+  // Workers at indices [n..total-1] are retiring (or already retired and
+  // waiting for reaping).  We must clean up our own references to them.
+  unsigned total = stack->get_num_worker_slots();
+  if (n >= total) {
+    // No retiring slots — nothing for this messenger to do.
+    return;
+  }
+
+  ldout(cct, 5) << __func__ << " migrating connections on retiring workers ["
+                << n << ".." << total - 1 << "]" << dendl;
+
+  std::vector<AsyncConnectionRef> to_migrate;
+  {
+    std::lock_guard l{lock};
+
+    // ---------------------------------------------------------------
+    // Reassign local_worker if it falls in the retiring range.
+    //
+    // local_worker drives two things:
+    //   1. reap_handler: unregister_conn() dispatches reap_handler to
+    //      local_worker->center.  If that center's thread has exited,
+    //      the dispatch is a use-after-free.
+    //   2. local_connection: a loopback AsyncConnection whose worker/
+    //      center pointers must remain valid for the messenger's lifetime.
+    //
+    // local_connection is NOT in conns/accepting_conns/anon_conns and
+    // will NOT be automatically reconnected if closed, so we cannot
+    // simply stop it.  Instead we migrate it to a surviving worker:
+    //   - assign a new local_worker via get_worker() (which only
+    //     considers workers[0..n-1] because set_num_workers() already
+    //     updated target_num_workers).
+    //   - update local_connection->worker and local_connection->center
+    //     to the new worker.  local_connection is loopback and registers
+    //     no file events, so no fd re-registration is required.
+    //   - release the old local_worker reference; get_worker() already
+    //     incremented the new worker's reference count.
+    // ---------------------------------------------------------------
+    if (local_worker->retiring.load()) {
+      // get_worker() only considers workers[0..n-1] because set_num_workers()
+      // already updated target_num_workers, so new_worker is always surviving.
+      Worker *new_worker = stack->get_worker();   // increments new ref
+      ldout(cct, 5) << __func__ << " migrating local_worker from "
+                    << local_worker->id << " to " << new_worker->id << dendl;
+
+      // migrate_loopback_worker takes the connection lock, updates worker/
+      // center/delay_state, and releases the old worker's reference.
+      local_connection->migrate_loopback_worker(new_worker);
+      local_worker = new_worker;
+    }
+
+    // ---------------------------------------------------------------
+    // Collect all connections on retiring workers so we can migrate
+    // them to surviving workers.  get_worker() only returns workers
+    // in [0..n-1] now that target_num_workers has been updated, so
+    // the migrated connections will land on surviving workers.
+    // ---------------------------------------------------------------
+    for (unsigned i = n; i < total; ++i) {
+      Worker *w = stack->get_worker(i);
+      for (auto& [addrs, conn] : conns) {
+        if (conn->get_worker() == w) {
+          to_migrate.push_back(conn);
+        }
+      }
+      for (auto& conn : accepting_conns) {
+        if (conn->get_worker() == w) {
+          to_migrate.push_back(conn);
+        }
+      }
+      for (auto& conn : anon_conns) {
+        if (conn->get_worker() == w) {
+          to_migrate.push_back(conn);
+        }
+      }
+    }
+  }
+
+  // Migrate every connection off a retiring worker onto a surviving one.
+  // migrate_worker() uses submit_to() internally:
+  //   1. Detach file/time events on the old worker's thread (so the retiring
+  //      worker stops delivering events before the new worker starts).
+  //   2. Swap worker/center pointers under the connection lock.
+  //   3. Re-attach file/time events on the new worker's thread.
+  //
+  // The three steps happen in order with no concurrent event delivery
+  // between them, so there are no race hazards and no events are lost.
+  for (auto& conn : to_migrate) {
+    Worker *new_worker = stack->get_worker();  // increments new worker's refcount
+    ldout(cct, 10) << __func__ << " migrating conn " << conn
+                   << " from worker " << conn->get_worker()->id
+                   << " to worker " << new_worker->id << dendl;
+    conn->migrate_worker(new_worker);
+  }
+}
+
+unsigned AsyncMessenger::get_num_worker()
+{
+  return stack->get_num_worker();
 }

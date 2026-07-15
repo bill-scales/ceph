@@ -124,8 +124,10 @@ AsyncConnection::AsyncConnection(CephContext *cct, AsyncMessenger *m, DispatchQu
                                  Worker *w, bool m2, bool local)
   : Connection(cct, m),
     delay_state(NULL), async_msgr(m), conn_id(q->get_id()),
-    logger(w->get_perf_counter()),
-    labeled_logger(w->get_labeled_perf_counter()),
+    logger_ref(w->get_perf_counter_shared()),
+    labeled_logger_ref(w->get_labeled_perf_counter_shared()),
+    logger(logger_ref.get()),
+    labeled_logger(labeled_logger_ref.get()),
     state(STATE_NONE), port(-1),
     dispatch_queue(q), recv_buf(NULL),
     recv_max_prefetch(std::max<int64_t>(msgr->cct->_conf->ms_tcp_prefetch_max_size, TCP_PREFETCH_MIN_SIZE)),
@@ -335,7 +337,13 @@ ssize_t AsyncConnection::_try_send(bool more)
     }
   }
 
-  ceph_assert(center->in_thread());
+  if (!center->in_thread()) {
+    // The connection was migrated to a new worker between when this write
+    // event was enqueued and now.  Re-dispatch to the correct center so
+    // the send is retried on the right thread.
+    center->dispatch_event_external(write_handler);
+    return 0;
+  }
   ldout(async_msgr->cct, 25) << __func__ << " cs.send " << outgoing_bl.length()
                              << " bytes" << dendl;
   // network block would make ::send return EAGAIN, that would make here looks
@@ -633,14 +641,171 @@ void AsyncConnection::_stop() {
   writeCallback = {};
   dispatch_queue->discard_queue(conn_id);
   async_msgr->unregister_conn(this);
-  worker->release_worker();
 
   state = STATE_CLOSED;
   open_write = false;
 
   state_offset = 0;
-  // Make sure in-queue events will been processed
+  // Enqueue the cleanup callback BEFORE releasing the worker reference.
+  // release_worker() may dispatch C_worker_done (the sentinel that exits
+  // the poll loop) when this is the last connection on a retiring worker.
+  // C_worker_done must be the last item in the external_events queue so
+  // that the worker thread processes this C_clean_handler before it exits.
+  // If we called release_worker() first, C_worker_done would land in the
+  // queue before C_clean_handler, and the worker would exit with
+  // C_clean_handler still pending — leaving a stale event in the dead
+  // EventCenter's queue that triggers an in_thread() assert when the
+  // EventCenter destructor tries to drain it on the wrong thread.
   center->dispatch_event_external(EventCallbackRef(new C_clean_handler(this)));
+  worker->release_worker();
+}
+
+void AsyncConnection::migrate_worker(Worker *new_worker)
+{
+  ceph_assert(!is_loopback);
+
+  EventCenter *old_center = center;   // safe to read outside lock: only we mutate it
+  Worker      *old_worker  = worker;
+
+  // -----------------------------------------------------------------------
+  // Step 1: drain all pending events on the old worker and swap the
+  //         worker/center pointers.
+  //
+  // The pointer swap MUST happen atomically with event draining, to close
+  // the following race:
+  //
+  //   T1 (any thread): dispatch_event_external(write_handler) via the old
+  //     center — write_handler lands in old center's external_events.
+  //   T2 (migrate caller): swap center → new worker.
+  //   Old worker: fires write_handler → write_event() → write_message()
+  //     asserts center->in_thread(); but center now points to new worker
+  //     → assert fires on the wrong thread.
+  //
+  // There are two cases depending on whether the old worker thread is still
+  // running:
+  //
+  // Case A — old worker is STILL RUNNING (retiring=true, references>0, or
+  //   just not yet exited):
+  //     We submit a synchronous lambda to the old worker's center.
+  //     submit_to() is ordered after all previously-enqueued external events
+  //     (FIFO queue), so by the time the lambda runs, all write_handler /
+  //     read_handler callbacks that were already enqueued have been processed.
+  //     We perform the pointer swap inside the lambda.  From that point on,
+  //     any dispatch_event_external(write_handler) will land on the new center.
+  //
+  // Case B — old worker thread has ALREADY EXITED (done=true):
+  //     The thread is gone; nobody is processing that center's queue.
+  //     No new event callbacks can fire on the old center.  We can perform
+  //     the pointer swap directly here — no submit_to() needed or safe.
+  //     (Calling submit_to() on a dead center would deadlock because nobody
+  //     would ever process the lambda and signal the waiting condvar.)
+  //
+  // In both cases we also unregister any file/time events from the old center
+  // so that if the old center is somehow drained later it sees nothing for
+  // this connection.
+  // -----------------------------------------------------------------------
+
+  // closed tracks whether the connection was already STATE_CLOSED/STATE_NONE
+  // at the time the old-worker work was done, so we know not to double-
+  // release old_worker (which _stop() already released).
+  bool closed = false;
+
+  // do_old_worker_work performs the event cleanup and pointer swap.
+  // on_old_thread=true  → called on the old worker's thread (Case A):
+  //   delete_file_event/delete_time_event are safe (they assert in_thread()).
+  // on_old_thread=false → old worker thread is dead (Case B):
+  //   skip those calls; the old center will never process events again.
+  auto do_old_worker_work = [&](bool on_old_thread) {
+    std::lock_guard<std::mutex> l(lock);
+
+    if (state == STATE_CLOSED || state == STATE_NONE) {
+      // Connection already stopped; _stop() already released old_worker.
+      new_worker->release_worker();
+      closed = true;
+      return;
+    }
+
+    // Remove file/time events from the old center so it no longer delivers
+    // notifications.  Only do this when we are actually on the old worker's
+    // thread; delete_file_event/delete_time_event assert in_thread().
+    // When the old thread is dead, these events will never fire anyway.
+    if (on_old_thread) {
+      if (cs) {
+        old_center->delete_file_event(cs.fd(), EVENT_READABLE | EVENT_WRITABLE);
+      }
+      for (auto id : register_time_events)
+        old_center->delete_time_event(id);
+      if (last_tick_id)
+        old_center->delete_time_event(last_tick_id);
+    }
+    open_write = false;
+    register_time_events.clear();
+    last_tick_id = 0;
+
+    // Swap the worker/center pointers.  After this, any subsequent
+    // dispatch_event_external(write_handler) goes to the new center.
+    worker = new_worker;
+    center = &new_worker->center;
+    if (delay_state)
+      delay_state->set_center(center);
+
+    logger_ref         = new_worker->get_perf_counter_shared();
+    labeled_logger_ref = new_worker->get_labeled_perf_counter_shared();
+    logger         = logger_ref.get();
+    labeled_logger = labeled_logger_ref.get();
+  };
+
+  if (old_worker->done) {
+    // Case B: old worker thread is dead — run inline, skipping event-center
+    // operations that require in_thread().
+    do_old_worker_work(false);
+  } else {
+    // Case A: old worker thread is alive — submit synchronously so we are
+    // ordered after any in-flight write_handler / read_handler events.
+    old_center->submit_to(old_center->get_id(),
+                          [&]() { do_old_worker_work(true); }, false);
+  }
+
+  if (closed) {
+    // old_worker was already released by _stop(); new_worker was released
+    // inside do_old_worker_work().
+    return;
+  }
+
+  // Release the OLD worker's reference now that we no longer use it.
+  old_worker->release_worker();
+
+  // -----------------------------------------------------------------------
+  // Step 2: on the NEW worker's thread — re-register file/time events so
+  //         the new center starts delivering events.
+  //
+  // center now points to new_worker's EventCenter (swapped in Step 1).
+  // -----------------------------------------------------------------------
+  center->submit_to(
+    center->get_id(),
+    [this]() {
+      std::lock_guard<std::mutex> l(lock);
+
+      if (state == STATE_CLOSED || state == STATE_NONE) {
+        return;   // closed between step 1 and step 2
+      }
+
+      if (cs) {
+        center->create_file_event(cs.fd(), EVENT_READABLE, read_handler);
+
+        if (is_queued()) {
+          center->create_file_event(cs.fd(), EVENT_WRITABLE, write_handler);
+          open_write = true;
+        }
+      }
+
+      if (!is_connected()) {
+        last_tick_id = center->create_time_event(connect_timeout_us, tick_handler);
+      } else if (inactive_timeout_us > 0) {
+        last_tick_id = center->create_time_event(inactive_timeout_us, tick_handler);
+      }
+    },
+    false /* synchronous */);
 }
 
 bool AsyncConnection::is_queued() const {
@@ -737,6 +902,18 @@ void AsyncConnection::mark_down()
 void AsyncConnection::handle_write()
 {
   ldout(async_msgr->cct, 10) << __func__ << dendl;
+  // A write_handler event may have been dispatched to the old worker's center
+  // just before a migration swapped center to a new worker.  The old worker's
+  // thread will dequeue and fire this callback even though center now belongs
+  // to the new worker.  Detect this case (in_thread() is false after the
+  // pointer swap) and re-dispatch to the now-correct center so the write runs
+  // on the right thread.  This mirrors the same guard in _try_send().
+  if (!center->in_thread()) {
+    ldout(async_msgr->cct, 10) << __func__
+      << " not on owning thread after migration, re-dispatching" << dendl;
+    center->dispatch_event_external(write_handler);
+    return;
+  }
   protocol->write_event();
 }
 
