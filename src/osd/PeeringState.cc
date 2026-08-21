@@ -3448,16 +3448,21 @@ void PeeringState::proc_master_log(
 
   // For partial writes we may be able to keep some of the divergent entries
   if (pool.info.allows_ecoptimizations() && (olog.head < pg_log.get_head())) {
+    psdout(10) << "BILL " << olog.head << " " << pg_log.get_head() << dendl;
     // Iterate backwards to divergence
     auto p = pg_log.get_log().log.end();
     while (p != pg_log.get_log().log.begin()) {
       --p;
+      psdout(10) << "BILL p->version " << p->version << dendl;
       if (p->version <= olog.head) {
         if (p->version == olog.head) {
           head_log_entry = &(*p);
         }
         break;
       }
+    }
+    for (auto entry : olog.log) {
+      psdout(10) << "BILL olog entry " << entry << "version=" << entry.version << dendl;
     }
     if (p == pg_log.get_log().log.end()) {
       // Empty log - probably due to a PG split - nothing to do
@@ -3468,27 +3473,32 @@ void PeeringState::proc_master_log(
       // p->version and olog.head we can still try to wind forward
       // partially written entries
       if (olog.log.empty()) {
- if (p->version <= olog.head) {
-   consider_adjusting_pwlc(p->version);
-   ++p;
- } else {
-   consider_adjusting_pwlc(pg_log.get_tail());
- }
+        if (p->version <= olog.head) {
+          psdout(10) << "BILL CASE 0A" << dendl;
+          consider_adjusting_pwlc(p->version);
+          ++p;
+        } else {
+          psdout(10) << "BILL CASE 0B" << dendl;
+          consider_adjusting_pwlc(pg_log.get_tail());
+        }
       } else {
- const eversion_t olast = olog.log.back().version;
- if (olast == p->version ||
-     (olast < p->version && p->version <= olog.head)) {
-   // Normal case - both logs have entry p->version, or olog has
-   // no entries between p->version and olog.head
-   consider_adjusting_pwlc(p->version);
-   ++p;
- } else if (olast < p->version) {
-   // Divergence is before the oldest entry both logs share
-   consider_adjusting_pwlc(pg_log.get_tail());
- } else {
-   // Other log is ahead of the primary log - give up
-   p = pg_log.get_log().log.end();
- }
+        const eversion_t olast = olog.log.back().version;
+        if (olast == p->version ||
+            (olast < p->version && p->version <= olog.head)) {
+          psdout(10) << "BILL CASE 1" << dendl;
+          // Normal case - both logs have entry p->version, or olog has
+          // no entries between p->version and olog.head
+          consider_adjusting_pwlc(p->version);
+          ++p;
+        } else if (olast < p->version) {
+          psdout(10) << "BILL CASE 2" << dendl;
+          // Divergence is before the oldest entry both logs share
+          consider_adjusting_pwlc(pg_log.get_tail());
+        } else {
+          psdout(10) << "BILL CASE 3" << dendl;
+          // Other log is ahead of the primary log - give up
+          p = pg_log.get_log().log.end();
+        }
       }
     }
     // See if we can wind forward partially written entries
