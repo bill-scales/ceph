@@ -10255,11 +10255,10 @@ void PrimaryLogPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
       }
     }
     if (cop->results.snaps.empty()) {
-      //FIXME: I think this code is now obsolete and will never run because we
-      //are doing the same job earlier in finish_copyfrom for the head object.
-      //Lets leave it here for now and see if it executes during the next
-      //teuthology run before deciding to delete it.
-      dout(10) << __func__ << " BILL - no more snaps for " << oid << dendl;
+      // Although the snapset is trimmed when the head objecy is
+      // migrated, it is possible that further trimming has
+      // happened by the time the clone is migrated
+      dout(10) << __func__ << " no more snaps for " << oid << dendl;
       if (cop->flags & CEPH_OSD_COPY_FROM_FLAG_POOL_MIGRATION) {
         dout(10) << __func__ << " updating snapset for trimmed clone " << oid << dendl;
         // Clone needs to be trimmed by updating the snapset in the head object
